@@ -85,27 +85,77 @@ def _set_cell_shading(cell, fill_hex: str):
 
 
 # ── Header / Footer ───────────────────────────────────────────────────────────
+# A4 text width with 2.54 cm (1 inch) margins = 21 cm - 5.08 cm = 15.92 cm
+# 15.92 cm × (1440 twips / 2.54 cm) = 9029 twips
+_RIGHT_TWIPS  = 9029
+_CENTER_TWIPS = 4514  # half of _RIGHT_TWIPS
 
-def _make_hf_para(container) -> Any:
-    """Return the first paragraph in a header/footer, cleared."""
-    para = container.paragraphs[0]
-    para.clear()
+
+def _reset_para(para):
+    """
+    Completely wipe a header/footer paragraph's XML, then return it.
+    para.clear() only removes run content — this also strips pPr so no
+    template tab stops or page-number fields bleed through.
+    """
+    p = para._p
+    for child in list(p):
+        p.remove(child)
     return para
 
 
-def _add_right_tab(para, twips: int = 9072):
-    """Add a right-aligned tab stop at `twips` (default ≈ 16 cm)."""
-    pPr = para._p.get_or_add_pPr()
-    tabs = OxmlElement("w:tabs")
-    tab = OxmlElement("w:tab")
-    tab.set(qn("w:val"), "right")
-    tab.set(qn("w:pos"), str(twips))
-    tabs.append(tab)
-    pPr.append(tabs)
+def _fresh_hf_para(container):
+    """Get the first paragraph of a header/footer and strip it bare."""
+    para = container.paragraphs[0]
+    return _reset_para(para)
 
 
-def _add_para_bottom_border(para):
-    pPr = para._p.get_or_add_pPr()
+def _build_pPr_tabs(para, *tab_specs):
+    """
+    Create a fresh pPr with exactly ONE w:tabs element containing the
+    requested tab stops.  Each spec is (val, pos_twips).
+    """
+    pPr = OxmlElement("w:pPr")
+    tabs_el = OxmlElement("w:tabs")
+    for val, pos in tab_specs:
+        tab = OxmlElement("w:tab")
+        tab.set(qn("w:val"), val)
+        tab.set(qn("w:pos"), str(pos))
+        tabs_el.append(tab)
+    pPr.append(tabs_el)
+    para._p.append(pPr)
+    return pPr
+
+
+def _hf_run(para, text: str) -> Any:
+    r = para.add_run(text)
+    r.font.size = Pt(10)
+    r.font.name = "Times New Roman"
+    return r
+
+
+def _page_number_field(para):
+    """Inline PAGE field — three consecutive runs (begin / instr / end)."""
+    for ftype, content in [("begin", None), ("instr", " PAGE "), ("end", None)]:
+        run = para.add_run()
+        if ftype == "instr":
+            el = OxmlElement("w:instrText")
+            el.set(qn("xml:space"), "preserve")
+            el.text = content
+            run._r.append(el)
+        else:
+            el = OxmlElement("w:fldChar")
+            el.set(qn("w:fldCharType"), ftype)
+            run._r.append(el)
+
+
+def _build_header(section, left_text: str, right_text: str):
+    """Left-aligned course code | right-aligned subject, thin bottom border."""
+    header = section.header
+    para = _fresh_hf_para(header)
+
+    pPr = _build_pPr_tabs(para, ("right", _RIGHT_TWIPS))
+
+    # Bottom border on header paragraph
     pBdr = OxmlElement("w:pBdr")
     bottom = OxmlElement("w:bottom")
     bottom.set(qn("w:val"), "single")
@@ -115,95 +165,42 @@ def _add_para_bottom_border(para):
     pBdr.append(bottom)
     pPr.append(pBdr)
 
-
-def _add_page_number_field(para):
-    """Insert a PAGE field run."""
-    run = para.add_run()
-    fld = OxmlElement("w:fldChar")
-    fld.set(qn("w:fldCharType"), "begin")
-    run._r.append(fld)
-
-    instr_run = para.add_run()
-    instr = OxmlElement("w:instrText")
-    instr.set(qn("xml:space"), "preserve")
-    instr.text = " PAGE "
-    instr_run._r.append(instr)
-
-    end_run = para.add_run()
-    end_fld = OxmlElement("w:fldChar")
-    end_fld.set(qn("w:fldCharType"), "end")
-    end_run._r.append(end_fld)
-
-
-def _build_header(section, left_text: str, right_text: str):
-    header = section.header
-    para = _make_hf_para(header)
-    _add_right_tab(para)
-    _add_para_bottom_border(para)
-
-    r1 = para.add_run(left_text)
-    r1.font.size = Pt(10)
-    r1.font.name = "Times New Roman"
-
+    _hf_run(para, left_text)
     para.add_run("\t")
-
-    r2 = para.add_run(right_text)
-    r2.font.size = Pt(10)
-    r2.font.name = "Times New Roman"
+    _hf_run(para, right_text)
 
 
 def _build_footer(section, left_text: str, right_text: str, page_numbers: bool, page_pos: str):
+    """Left-aligned lab number | optional center page number | right-aligned enroll no."""
     footer = section.footer
-    para = _make_hf_para(footer)
+    para = _fresh_hf_para(footer)
 
     if page_numbers and page_pos == "center":
-        # Three-column layout: left | center (page number) | right
-        _add_right_tab(para)
-        # left tab stop at ~half page for center
-        pPr = para._p.get_or_add_pPr()
-        tabs = OxmlElement("w:tabs")
-        center_tab = OxmlElement("w:tab")
-        center_tab.set(qn("w:val"), "center")
-        center_tab.set(qn("w:pos"), "4536")
-        tabs.append(center_tab)
-        right_tab = OxmlElement("w:tab")
-        right_tab.set(qn("w:val"), "right")
-        right_tab.set(qn("w:pos"), "9072")
-        tabs.append(right_tab)
-        pPr.append(tabs)
-
-        r1 = para.add_run(left_text)
-        r1.font.size = Pt(10)
-        r1.font.name = "Times New Roman"
+        # Tab stops: center for page number, right for enrollment
+        _build_pPr_tabs(para,
+                        ("center", _CENTER_TWIPS),
+                        ("right",  _RIGHT_TWIPS))
+        _hf_run(para, left_text)
         para.add_run("\t")
-        _add_page_number_field(para)
+        _page_number_field(para)
         para.add_run("\t")
-        r2 = para.add_run(right_text)
-        r2.font.size = Pt(10)
-        r2.font.name = "Times New Roman"
+        _hf_run(para, right_text)
 
     elif page_numbers and page_pos == "right":
-        _add_right_tab(para)
-        r1 = para.add_run(left_text)
-        r1.font.size = Pt(10)
-        r1.font.name = "Times New Roman"
-        para.add_run("   ")
-        r2 = para.add_run(right_text)
-        r2.font.size = Pt(10)
-        r2.font.name = "Times New Roman"
+        # Tab stops: right for page number; enrollment sits before tab
+        _build_pPr_tabs(para, ("right", _RIGHT_TWIPS))
+        _hf_run(para, left_text)
+        para.add_run("    ")
+        _hf_run(para, right_text)
         para.add_run("\t")
-        _add_page_number_field(para)
+        _page_number_field(para)
 
     else:
-        # No page numbers — just left + right
-        _add_right_tab(para)
-        r1 = para.add_run(left_text)
-        r1.font.size = Pt(10)
-        r1.font.name = "Times New Roman"
+        # No page numbers — just left tab-right
+        _build_pPr_tabs(para, ("right", _RIGHT_TWIPS))
+        _hf_run(para, left_text)
         para.add_run("\t")
-        r2 = para.add_run(right_text)
-        r2.font.size = Pt(10)
-        r2.font.name = "Times New Roman"
+        _hf_run(para, right_text)
 
 
 # ── TOC field ─────────────────────────────────────────────────────────────────

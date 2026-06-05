@@ -1,0 +1,77 @@
+Clear. Two issues visible:
+
+**Image 1 — output doc:**
+- Header: `ECSCI2430` (missing last digit — should be `ECSCI24305`) → input truncation bug
+- Header center gap too wide — Subject `Deep Learning` appears center-ish, not right-aligned
+- Footer: `61AUA23BCS159` — extra `6` prepended to enrollment number → definitely a bug in how footer text is being built/concatenated
+- Footer page number position off — `61AUA23BCS159` appears center, not right
+
+**Image 2 — form input:**
+- Values entered correctly: `ECSCI2430` wait — actually form shows `ECSCI2430` not `ECSCI24305` — so user typed it that way OR field is cutting off display. Check if input field has `maxLength` restriction cutting at 9 chars.
+- Enrollment shows `1AUA23BCS159` correct in form → becomes `61AUA23BCS159` in output → something is prepending `6` (likely page number field bleeding into footer left run)
+
+---
+
+**Fixes to tell Replit:**
+
+---
+
+Fix these 3 bugs in the notebook converter:
+
+**Bug 1 — Course code input truncation:**
+Check if the Course Code input field has a `maxLength` attribute — remove it. Field must accept full course codes like `ECSCI24305` (10+ chars).
+
+**Bug 2 — Enrollment number gets extra character prepended in footer:**
+In `nb_converter.py` (or wherever footer is built), the footer paragraph likely has a leftover run or page number field that is concatenating with the enrollment text. Fix:
+
+```python
+def set_footer(section, left_text, right_text, include_page_num=False):
+    footer = section.footer
+    para = footer.paragraphs[0]
+    para.clear()  # ← CRITICAL: clear ALL existing runs first
+    
+    # Tab stop at right margin
+    pPr = para._p.get_or_add_pPr()
+    tabs = OxmlElement('w:tabs')
+    tab = OxmlElement('w:tab')
+    tab.set(qn('w:val'), 'right')
+    tab.set(qn('w:pos'), '9360')
+    tabs.append(tab)
+    pPr.append(tabs)
+    
+    # Left: lab number
+    run1 = para.add_run(left_text)
+    run1.font.size = Pt(10)
+    run1.font.name = 'Times New Roman'
+    
+    if include_page_num:
+        para.add_run('\t')
+        # center page number as separate paragraph or inline
+        add_page_number(para)
+        para.add_run('\t')
+    else:
+        para.add_run('\t')
+    
+    # Right: enrollment number — isolated run, nothing else appended
+    run2 = para.add_run(right_text)
+    run2.font.size = Pt(10)
+    run2.font.name = 'Times New Roman'
+```
+
+Key: `para.clear()` before building — existing template footer likely has a page number field already embedded that bleeds into ur text.
+
+**Bug 3 — Header subject not right-aligned:**
+Same issue — tab stop position `9360` (in twentieths of a point = twips) assumes default margins. If margins differ, subject drifts to center. Use this calculation:
+
+```python
+from docx.shared import Inches
+# Page width 8.27" (A4), left margin 1", right margin 1" = text width 6.27"
+# 6.27 inches * 1440 twips/inch = 9029 twips
+tab.set(qn('w:pos'), '9029')  # A4 with 1" margins
+```
+
+If using 2.54cm (1 inch) margins on A4: text width = 21cm - 5.08cm = 15.92cm = 9029 twips. Use `9029` not `9360`.
+
+---
+
+After these 3 fixes, header/footer should render exactly like the reference PDF.
