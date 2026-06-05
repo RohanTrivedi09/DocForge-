@@ -5,9 +5,6 @@
  * WordForge API specification
  * OpenAPI spec version: 0.1.0
  */
-export interface HealthStatus {
-  status: string;
-}
 
 export interface AiSuggestInput {
   /** What triggered the suggestion (e.g. 'header_focus', 'h1_large', 'dark_color', 'ipynb_large', 'double_spacing') */
@@ -15,9 +12,3 @@ export interface AiSuggestInput {
   /** Additional context (e.g. current value or field name) */
   context?: string;
 }
-
-export interface AiSuggestion {
-  /** The hint text to show the user */
-  suggestion: string;
-}
-

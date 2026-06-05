@@ -6,6 +6,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export * from './aiSuggestInput';
-export * from './aiSuggestion';
-export * from './healthStatus';
+export interface AiSuggestion {
+  /** The hint text to show the user */
+  suggestion: string;
+}
