@@ -1,0 +1,159 @@
+Good reference. Read the PDF fully. Here's what ur university format uses:
+
+**Header:** `ECSCI24305    Deep Learning` (course code left, subject right)
+**Footer:** `Lab-7    1AUA23BCS159` (lab number left, enrollment right)
+**Font:** Times New Roman body, Courier New for code
+**Code blocks:** syntax-colored (keywords in blue/orange, comments in green)
+**Outputs:** plain text inline, plots embedded as images
+**Tables:** bordered, clean
+**Page:** portrait, standard margins
+
+---
+
+Here's the updated Replit prompt section specifically for the notebook converter — paste this to replace/extend the notebook converter section in the previous prompt:
+
+---
+
+## Feature 2 — `.ipynb` to `.docx` Converter (Updated)
+
+### Conversion output must match this exact university lab format:
+
+**Page Header (every page):**
+- Left-aligned: Course Code (e.g. `ECSCI24305`)
+- Right-aligned: Subject Name (e.g. `Deep Learning`)
+- Thin bottom border line under header
+
+**Page Footer (every page):**
+- Left-aligned: Lab label (e.g. `Lab-7`)
+- Right-aligned: Enrollment Number (e.g. `1AUA23BCS159`)
+- Page number optional (center, toggle)
+
+**These 4 fields must be input by the user before conversion — shown as a clean form directly on the converter page (inline, not buried in settings):**
+
+```
+[ Course Code      ]  [ Subject Name ]
+[ Lab Number       ]  [ Enrollment No ]
+[ ] Include page numbers  (●) Center  ( ) Right
+```
+
+Wire directly to `python-docx` header/footer with left+right tab stops:
+
+```python
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+from docx.shared import Pt
+from docx.enum.text import WD_TAB_ALIGNMENT
+
+def set_header(section, left_text, right_text):
+    header = section.header
+    para = header.paragraphs[0]
+    para.clear()
+    # Add tab stop at right margin
+    pPr = para._p.get_or_add_pPr()
+    tabs = OxmlElement('w:tabs')
+    tab = OxmlElement('w:tab')
+    tab.set(qn('w:val'), 'right')
+    tab.set(qn('w:pos'), '9360')  # ~16.5cm right margin position
+    tabs.append(tab)
+    pPr.append(tabs)
+    run1 = para.add_run(left_text)
+    run1.font.size = Pt(10)
+    para.add_run('\t')
+    run2 = para.add_run(right_text)
+    run2.font.size = Pt(10)
+    # Add bottom border to header
+    pBdr = OxmlElement('w:pBdr')
+    bottom = OxmlElement('w:bottom')
+    bottom.set(qn('w:val'), 'single')
+    bottom.set(qn('w:sz'), '4')
+    bottom.set(qn('w:space'), '1')
+    bottom.set(qn('w:color'), '000000')
+    pBdr.append(bottom)
+    pPr.append(pBdr)
+```
+
+Same pattern for footer with left_text=lab_number, right_text=enrollment_no.
+
+---
+
+### Cell rendering rules (match PDF reference exactly):
+
+**Markdown cells:**
+- `# H1` → Word Heading 1, Times New Roman 16pt bold
+- `## H2` → Heading 2, 14pt bold
+- `### H3` → Heading 3, 12pt bold
+- Body text → TNR 12pt
+- Bold/italic preserved
+- Bullet lists → Word list paragraphs
+
+**Code cells:**
+- Background shading `#F2F2F2` (light gray)
+- Font: Courier New 10pt
+- Syntax coloring via token parsing:
+  - Keywords (`import`, `def`, `for`, `with`, `return`, `in`, `if`) → `#0000FF` (blue)
+  - Strings → `#BA2121` (dark red)
+  - Comments (`#...`) → `#3D7A00` (green)
+  - Numbers → `#008000`
+  - Default/identifiers → black
+- Use Python's `tokenize` module to parse tokens, apply color per run in python-docx
+- Label above each code cell: `In [N]:` in gray italic TNR 10pt (match notebook style)
+
+**Text output cells:**
+- Courier New 10pt, no shading, indented 0.5cm left
+- Prefixed with nothing — just the raw output text
+
+**Plot/image outputs (base64 PNG):**
+- Decode and embed via `doc.add_picture()`, max width 12cm, centered
+- Caption below: `Figure N` in gray italic 9pt, centered (auto-increment)
+
+**DataFrame/table outputs:**
+- Word table, auto-fit columns
+- First row: bold, shading `#D9D9D9`
+- Alternating rows: white / `#F7F7F7`
+- Thin borders all cells
+
+**Warning/stderr outputs:**
+- Skip silently OR show in light yellow `#FFFBE6` box, Courier New 9pt gray text — add toggle "Show warnings" (default OFF)
+
+---
+
+### Converter UI (match NotebookForge style — inline form, not buried):
+
+```
+┌─────────────────────────────────────────────────┐
+│  📓 Notebook to Word Converter                   │
+│                                                  │
+│  [  Drop .ipynb here or click to upload  ]       │
+│                                                  │
+│  ── Document Info ──────────────────────────     │
+│  Course Code  [ECSCI24305    ]  Subject  [Deep Learning   ] │
+│  Lab Number   [Lab-7         ]  Enroll No [1AUA23BCS159  ] │
+│                                                  │
+│  ── Options ────────────────────────────────     │
+│  [x] Syntax-colored code blocks                  │
+│  [x] Embed plot images                           │
+│  [x] Render DataFrames as tables                 │
+│  [ ] Add Table of Contents                       │
+│  [ ] Show warnings/stderr                        │
+│  [ ] Add page numbers  Position: (•) Center      │
+│                                                  │
+│  Filename: [DL_Lab7_Rohan    ].docx              │
+│                                                  │
+│  [ Convert & Download ]                          │
+└─────────────────────────────────────────────────┘
+```
+
+---
+
+### Batch convert:
+Upload up to 5 `.ipynb` files → same header/footer fields apply to all → downloads as `.zip`
+
+---
+
+### Default values pre-filled on load:
+- Course Code: blank
+- Subject: blank
+- Lab Number: `Lab-1`
+- Enrollment No: blank
+- All checkboxes: on except TOC and warnings
+- Filename: derived from uploaded filename (e.g. `DL_Lab7.ipynb` → `DL_Lab7.docx`)

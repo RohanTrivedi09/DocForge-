@@ -1,31 +1,40 @@
 """
 .ipynb → .docx conversion for WordForge.
-Handles markdown, code cells, outputs, images, DataFrames, and TOC.
+Handles markdown, syntax-coloured code, outputs, images, DataFrames, TOC, header/footer.
 """
 
 import io
 import re
 import base64
-from typing import Dict, Any, Optional
-
-# Matches ANSI/VT100 escape sequences (e.g. colour codes printed by tqdm etc.)
-_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[mGKHF]|\x1b\[[?][0-9;]*[hl]|\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b.")
-
-def _sanitize(text: str) -> str:
-    """Remove ANSI escape codes and XML-illegal control characters from text."""
-    text = _ANSI_RE.sub("", text)
-    # Strip NULL bytes and C0/C1 control chars except tab, newline, carriage return
-    return "".join(ch for ch in text if ch == "\t" or ch == "\n" or ch == "\r" or (ord(ch) >= 0x20 and ord(ch) != 0x7F))
+import tokenize as _tokenize
+import token as _token
+from typing import Dict, Any, Optional, List, Tuple
 
 import nbformat
 from docx import Document
-from docx.shared import Pt, RGBColor, Cm
+from docx.shared import Pt, RGBColor, Cm, Inches
 from docx.enum.text import WD_ALIGN_PARAGRAPH
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
+# ── Sanitise ──────────────────────────────────────────────────────────────────
 
-# ── Shading & borders ─────────────────────────────────────────────────────────
+_ANSI_RE = re.compile(
+    r"\x1b\[[0-9;]*[mGKHF]"
+    r"|\x1b\[[?][0-9;]*[hl]"
+    r"|\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]"
+    r"|\x1b."
+)
+
+def _sanitize(text: str) -> str:
+    text = _ANSI_RE.sub("", text)
+    return "".join(
+        ch for ch in text
+        if ch in ("\t", "\n", "\r") or (0x20 <= ord(ch) <= 0x7E) or ord(ch) > 0x9F
+    )
+
+
+# ── XML helpers ───────────────────────────────────────────────────────────────
 
 def _set_para_shading(para, fill_hex: str):
     pPr = para._p.get_or_add_pPr()
@@ -65,31 +74,158 @@ def _shade_row(row, fill_hex: str):
         tcPr.append(shd)
 
 
+def _set_cell_shading(cell, fill_hex: str):
+    tc = cell._tc
+    tcPr = tc.get_or_add_tcPr()
+    shd = OxmlElement("w:shd")
+    shd.set(qn("w:val"), "clear")
+    shd.set(qn("w:color"), "auto")
+    shd.set(qn("w:fill"), fill_hex.lstrip("#"))
+    tcPr.append(shd)
+
+
+# ── Header / Footer ───────────────────────────────────────────────────────────
+
+def _make_hf_para(container) -> Any:
+    """Return the first paragraph in a header/footer, cleared."""
+    para = container.paragraphs[0]
+    para.clear()
+    return para
+
+
+def _add_right_tab(para, twips: int = 9072):
+    """Add a right-aligned tab stop at `twips` (default ≈ 16 cm)."""
+    pPr = para._p.get_or_add_pPr()
+    tabs = OxmlElement("w:tabs")
+    tab = OxmlElement("w:tab")
+    tab.set(qn("w:val"), "right")
+    tab.set(qn("w:pos"), str(twips))
+    tabs.append(tab)
+    pPr.append(tabs)
+
+
+def _add_para_bottom_border(para):
+    pPr = para._p.get_or_add_pPr()
+    pBdr = OxmlElement("w:pBdr")
+    bottom = OxmlElement("w:bottom")
+    bottom.set(qn("w:val"), "single")
+    bottom.set(qn("w:sz"), "4")
+    bottom.set(qn("w:space"), "1")
+    bottom.set(qn("w:color"), "000000")
+    pBdr.append(bottom)
+    pPr.append(pBdr)
+
+
+def _add_page_number_field(para):
+    """Insert a PAGE field run."""
+    run = para.add_run()
+    fld = OxmlElement("w:fldChar")
+    fld.set(qn("w:fldCharType"), "begin")
+    run._r.append(fld)
+
+    instr_run = para.add_run()
+    instr = OxmlElement("w:instrText")
+    instr.set(qn("xml:space"), "preserve")
+    instr.text = " PAGE "
+    instr_run._r.append(instr)
+
+    end_run = para.add_run()
+    end_fld = OxmlElement("w:fldChar")
+    end_fld.set(qn("w:fldCharType"), "end")
+    end_run._r.append(end_fld)
+
+
+def _build_header(section, left_text: str, right_text: str):
+    header = section.header
+    para = _make_hf_para(header)
+    _add_right_tab(para)
+    _add_para_bottom_border(para)
+
+    r1 = para.add_run(left_text)
+    r1.font.size = Pt(10)
+    r1.font.name = "Times New Roman"
+
+    para.add_run("\t")
+
+    r2 = para.add_run(right_text)
+    r2.font.size = Pt(10)
+    r2.font.name = "Times New Roman"
+
+
+def _build_footer(section, left_text: str, right_text: str, page_numbers: bool, page_pos: str):
+    footer = section.footer
+    para = _make_hf_para(footer)
+
+    if page_numbers and page_pos == "center":
+        # Three-column layout: left | center (page number) | right
+        _add_right_tab(para)
+        # left tab stop at ~half page for center
+        pPr = para._p.get_or_add_pPr()
+        tabs = OxmlElement("w:tabs")
+        center_tab = OxmlElement("w:tab")
+        center_tab.set(qn("w:val"), "center")
+        center_tab.set(qn("w:pos"), "4536")
+        tabs.append(center_tab)
+        right_tab = OxmlElement("w:tab")
+        right_tab.set(qn("w:val"), "right")
+        right_tab.set(qn("w:pos"), "9072")
+        tabs.append(right_tab)
+        pPr.append(tabs)
+
+        r1 = para.add_run(left_text)
+        r1.font.size = Pt(10)
+        r1.font.name = "Times New Roman"
+        para.add_run("\t")
+        _add_page_number_field(para)
+        para.add_run("\t")
+        r2 = para.add_run(right_text)
+        r2.font.size = Pt(10)
+        r2.font.name = "Times New Roman"
+
+    elif page_numbers and page_pos == "right":
+        _add_right_tab(para)
+        r1 = para.add_run(left_text)
+        r1.font.size = Pt(10)
+        r1.font.name = "Times New Roman"
+        para.add_run("   ")
+        r2 = para.add_run(right_text)
+        r2.font.size = Pt(10)
+        r2.font.name = "Times New Roman"
+        para.add_run("\t")
+        _add_page_number_field(para)
+
+    else:
+        # No page numbers — just left + right
+        _add_right_tab(para)
+        r1 = para.add_run(left_text)
+        r1.font.size = Pt(10)
+        r1.font.name = "Times New Roman"
+        para.add_run("\t")
+        r2 = para.add_run(right_text)
+        r2.font.size = Pt(10)
+        r2.font.name = "Times New Roman"
+
+
 # ── TOC field ─────────────────────────────────────────────────────────────────
 
 def _insert_toc(doc: Document):
-    """Insert a Table of Contents field at the current position (requires Word to update on open)."""
     para = doc.add_paragraph()
     run = para.add_run()
-
     fldBegin = OxmlElement("w:fldChar")
     fldBegin.set(qn("w:fldCharType"), "begin")
     run._r.append(fldBegin)
-
     instr = OxmlElement("w:instrText")
     instr.set(qn("xml:space"), "preserve")
     instr.text = ' TOC \\o "1-3" \\h \\z \\u '
     run._r.append(instr)
-
     fldEnd = OxmlElement("w:fldChar")
     fldEnd.set(qn("w:fldCharType"), "end")
     run._r.append(fldEnd)
-
     note = doc.add_paragraph()
-    note_run = note.add_run("(Table of Contents — press Ctrl+A then F9 in Word to update)")
-    note_run.font.size = Pt(9)
-    note_run.font.italic = True
-    note_run.font.color.rgb = RGBColor(0x88, 0x88, 0x88)
+    nr = note.add_run("(Press Ctrl+A then F9 in Word to update the Table of Contents)")
+    nr.font.size = Pt(9)
+    nr.italic = True
+    nr.font.color.rgb = RGBColor(0x88, 0x88, 0x88)
     doc.add_paragraph()
 
 
@@ -99,15 +235,12 @@ def _apply_inline_markdown(text: str, para):
     parts = re.split(r"(\*\*.*?\*\*|\*.*?\*|`.*?`)", text)
     for part in parts:
         if part.startswith("**") and part.endswith("**"):
-            r = para.add_run(part[2:-2])
-            r.bold = True
+            r = para.add_run(part[2:-2]); r.bold = True
         elif part.startswith("*") and part.endswith("*"):
-            r = para.add_run(part[1:-1])
-            r.italic = True
+            r = para.add_run(part[1:-1]); r.italic = True
         elif part.startswith("`") and part.endswith("`"):
             r = para.add_run(part[1:-1])
-            r.font.name = "Courier New"
-            r.font.size = Pt(10)
+            r.font.name = "Courier New"; r.font.size = Pt(10)
         else:
             para.add_run(part)
 
@@ -119,71 +252,155 @@ def _process_markdown(doc: Document, source: str):
     i = 0
     while i < len(lines):
         line = lines[i]
-
         m = re.match(r"^(#{1,6})\s+(.*)", line)
         if m:
             doc.add_heading(m.group(2), level=min(len(m.group(1)), 4))
-            i += 1
-            continue
-
+            i += 1; continue
         if re.match(r"^[-*+]\s+", line):
             para = doc.add_paragraph(style="List Bullet")
             _apply_inline_markdown(re.sub(r"^[-*+]\s+", "", line), para)
-            i += 1
-            continue
-
+            i += 1; continue
         if re.match(r"^\d+\.\s+", line):
             para = doc.add_paragraph(style="List Number")
             _apply_inline_markdown(re.sub(r"^\d+\.\s+", "", line), para)
-            i += 1
-            continue
-
+            i += 1; continue
         if not line.strip():
-            i += 1
-            continue
-
+            i += 1; continue
         para = doc.add_paragraph()
         _apply_inline_markdown(line, para)
         i += 1
 
 
-# ── Code cell ─────────────────────────────────────────────────────────────────
+# ── Syntax coloring ───────────────────────────────────────────────────────────
 
-def _add_code_cell(doc: Document, source: str, cell_number: int):
+_KEYWORDS = frozenset({
+    "False", "None", "True", "and", "as", "assert", "async", "await",
+    "break", "class", "continue", "def", "del", "elif", "else", "except",
+    "finally", "for", "from", "global", "if", "import", "in", "is",
+    "lambda", "nonlocal", "not", "or", "pass", "raise", "return", "try",
+    "while", "with", "yield",
+})
+
+_C_BLUE    = RGBColor(0x00, 0x00, 0xFF)   # keywords
+_C_RED     = RGBColor(0xBA, 0x21, 0x21)   # strings
+_C_GREEN   = RGBColor(0x3D, 0x7A, 0x00)   # comments
+_C_NUM     = RGBColor(0x00, 0x80, 0x00)   # numbers
+_C_BLACK   = RGBColor(0x00, 0x00, 0x00)
+
+
+def _tokenize_code(source: str) -> List[Tuple[int, int, int, str, Optional[RGBColor]]]:
+    """
+    Returns list of (row0, col_start, col_end, text, color) tuples.
+    row0 is 0-indexed line number.
+    """
+    segments: List[Tuple[int, int, int, str, Optional[RGBColor]]] = []
+    try:
+        tokens = list(_tokenize.generate_tokens(io.StringIO(source).readline))
+    except _tokenize.TokenError:
+        return []
+
+    for tok in tokens:
+        ttype, tstring, (srow, scol), (erow, ecol), _ = tok
+        if ttype in (_token.NEWLINE, _token.NL, _token.ENDMARKER, _token.INDENT, _token.DEDENT):
+            continue
+        if ttype == _token.COMMENT:
+            color = _C_GREEN
+        elif ttype == _token.STRING:
+            color = _C_RED
+        elif ttype == _token.NUMBER:
+            color = _C_NUM
+        elif ttype == _token.NAME and tstring in _KEYWORDS:
+            color = _C_BLUE
+        else:
+            color = _C_BLACK
+        # Only handle single-line tokens for simplicity
+        if srow == erow:
+            segments.append((srow - 1, scol, ecol, tstring, color))
+    return segments
+
+
+def _add_code_cell(doc: Document, source: str, execution_count: Optional[int], syntax_color: bool):
+    # Label: In [N]:
     label = doc.add_paragraph()
-    lr = label.add_run(f"[ Code Cell {cell_number} ]")
-    lr.bold = True
+    lr = label.add_run(f"In [{execution_count if execution_count is not None else ' '}]:")
     lr.italic = True
-    lr.font.size = Pt(9)
+    lr.font.size = Pt(10)
+    lr.font.name = "Times New Roman"
     lr.font.color.rgb = RGBColor(0x77, 0x77, 0x77)
     label.paragraph_format.space_after = Pt(0)
 
-    for line in (source or "").split("\n"):
-        para = doc.add_paragraph()
-        run = para.add_run(line)
-        run.font.name = "Courier New"
-        run.font.size = Pt(9)
-        para.paragraph_format.space_before = Pt(0)
-        para.paragraph_format.space_after = Pt(0)
-        _set_para_shading(para, "F2F2F2")
+    lines = (source or "").split("\n")
+
+    if syntax_color:
+        segments = _tokenize_code(source or "")
+        # Group by row
+        by_row: Dict[int, List[Tuple[int, int, str, Optional[RGBColor]]]] = {}
+        for (row, cs, ce, txt, col) in segments:
+            by_row.setdefault(row, []).append((cs, ce, txt, col))
+        # Sort each row by col start
+        for row in by_row:
+            by_row[row].sort(key=lambda x: x[0])
+
+        for li, raw_line in enumerate(lines):
+            para = doc.add_paragraph()
+            para.paragraph_format.space_before = Pt(0)
+            para.paragraph_format.space_after = Pt(0)
+            _set_para_shading(para, "F2F2F2")
+
+            row_segs = by_row.get(li, [])
+            if not row_segs:
+                # No tokens on this line — write as plain
+                r = para.add_run(raw_line)
+                r.font.name = "Courier New"; r.font.size = Pt(10); r.font.color.rgb = _C_BLACK
+                continue
+
+            pos = 0
+            for (cs, ce, txt, color) in row_segs:
+                if cs > pos:
+                    gap = raw_line[pos:cs]
+                    if gap:
+                        r = para.add_run(gap)
+                        r.font.name = "Courier New"; r.font.size = Pt(10); r.font.color.rgb = _C_BLACK
+                r = para.add_run(txt)
+                r.font.name = "Courier New"; r.font.size = Pt(10)
+                if color: r.font.color.rgb = color
+                pos = ce
+            # tail
+            if pos < len(raw_line):
+                r = para.add_run(raw_line[pos:])
+                r.font.name = "Courier New"; r.font.size = Pt(10); r.font.color.rgb = _C_BLACK
+    else:
+        for raw_line in lines:
+            para = doc.add_paragraph()
+            para.paragraph_format.space_before = Pt(0)
+            para.paragraph_format.space_after = Pt(0)
+            _set_para_shading(para, "F2F2F2")
+            r = para.add_run(raw_line)
+            r.font.name = "Courier New"; r.font.size = Pt(10); r.font.color.rgb = _C_BLACK
 
     doc.add_paragraph()
 
 
-# ── Text output (light yellow background) ─────────────────────────────────────
+# ── Text / warning output ─────────────────────────────────────────────────────
 
-def _add_text_output(doc: Document, text: str):
+def _add_text_output(doc: Document, text: str, shaded: bool = False):
+    """Render plain text output. shaded=True → yellow warning box."""
     for line in _sanitize(text).split("\n"):
         if not line.strip():
             continue
         para = doc.add_paragraph()
         run = para.add_run(line)
         run.font.name = "Courier New"
-        run.font.size = Pt(9)
-        run.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
+        run.font.size = Pt(10)
+        if shaded:
+            run.font.color.rgb = RGBColor(0x55, 0x55, 0x55)
+            _set_para_shading(para, "FFFBE6")
+        else:
+            run.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
+            # Indent 0.5 cm from left
+            para.paragraph_format.left_indent = Cm(0.5)
         para.paragraph_format.space_before = Pt(0)
         para.paragraph_format.space_after = Pt(0)
-        _set_para_shading(para, "FFFBE6")
     doc.add_paragraph()
 
 
@@ -192,23 +409,28 @@ def _add_text_output(doc: Document, text: str):
 def _add_image_output(doc: Document, b64_data: str, caption: Optional[str] = None):
     try:
         img_bytes = base64.b64decode(b64_data)
-        doc.add_picture(io.BytesIO(img_bytes), width=Cm(14))
+        last = doc.add_picture(io.BytesIO(img_bytes), width=Cm(12))
+        # Centre the picture paragraph
+        last_para = doc.paragraphs[-1]
+        last_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
         if caption:
             cap = doc.add_paragraph()
-            cap_run = cap.add_run(caption)
-            cap_run.font.size = Pt(9)
-            cap_run.italic = True
-            cap_run.font.color.rgb = RGBColor(0x55, 0x55, 0x55)
             cap.alignment = WD_ALIGN_PARAGRAPH.CENTER
+            cr = cap.add_run(caption)
+            cr.font.size = Pt(9)
+            cr.italic = True
+            cr.font.color.rgb = RGBColor(0x55, 0x55, 0x55)
         doc.add_paragraph()
     except Exception:
-        doc.add_paragraph("[Image output could not be embedded]")
+        doc.add_paragraph("[Image could not be embedded]")
 
 
 # ── DataFrame table ───────────────────────────────────────────────────────────
 
 def _add_dataframe_table(doc: Document, text: str):
     lines = [l for l in text.strip().split("\n") if l.strip()]
+    # Filter out pandas separator rows (e.g. "---  ---")
+    lines = [l for l in lines if not re.match(r"^[-\s|]+$", l)]
     if len(lines) < 2:
         _add_text_output(doc, text)
         return
@@ -220,17 +442,24 @@ def _add_dataframe_table(doc: Document, text: str):
         return
 
     table = doc.add_table(rows=len(rows), cols=max_cols)
+    table.style = "Table Grid"
     _add_table_borders(table)
 
     for ri, row_data in enumerate(rows):
-        if ri % 2 == 1:
-            _shade_row(table.rows[ri], "F7F7F7")
+        row = table.rows[ri]
+        if ri == 0:
+            _shade_row(row, "D9D9D9")
+        elif ri % 2 == 0:
+            _shade_row(row, "F7F7F7")
         for ci, cell_text in enumerate(row_data):
-            cell = table.rows[ri].cells[ci]
+            if ci >= max_cols:
+                break
+            cell = row.cells[ci]
             cell.text = cell_text.strip()
-            if ri == 0:
-                for para in cell.paragraphs:
-                    for run in para.runs:
+            for para in cell.paragraphs:
+                for run in para.runs:
+                    run.font.size = Pt(10)
+                    if ri == 0:
                         run.bold = True
 
     doc.add_paragraph()
@@ -242,11 +471,9 @@ def convert_notebook(file_bytes: bytes, cfg: Dict[str, Any]) -> bytes:
     nb = nbformat.reads(file_bytes.decode("utf-8"), as_version=4)
     doc = Document()
 
+    # Margins
     raw_margins = cfg.get("margins", 2.5)
-    if isinstance(raw_margins, dict):
-        margins_val = float(raw_margins.get("top", 2.5))
-    else:
-        margins_val = float(raw_margins)
+    margins_val = float(raw_margins.get("top", 2.5)) if isinstance(raw_margins, dict) else float(raw_margins)
 
     for section in doc.sections:
         section.top_margin = Cm(margins_val)
@@ -254,26 +481,39 @@ def convert_notebook(file_bytes: bytes, cfg: Dict[str, Any]) -> bytes:
         section.left_margin = Cm(margins_val)
         section.right_margin = Cm(margins_val)
 
-    # Notebook title
-    nb_title = (
-        nb.get("metadata", {}).get("kernelspec", {}).get("display_name")
-        or cfg.get("title")
-        or "Notebook"
-    )
-    doc.add_heading(nb_title, level=1)
+    # Header / footer
+    course_code = cfg.get("courseCode", "").strip()
+    subject     = cfg.get("subject", "").strip()
+    lab_number  = cfg.get("labNumber", "").strip()
+    enroll_no   = cfg.get("enrollNo", "").strip()
+    page_numbers = bool(cfg.get("pageNumbers", False))
+    page_pos     = cfg.get("pageNumberPos", "center")
+
+    if course_code or subject or lab_number or enroll_no:
+        for section in doc.sections:
+            section.different_first_page_header_footer = False
+            if course_code or subject:
+                _build_header(section, course_code, subject)
+            if lab_number or enroll_no or page_numbers:
+                _build_footer(section, lab_number, enroll_no, page_numbers, page_pos)
+
+    # Options
+    syntax_color    = bool(cfg.get("syntaxColor", True))
+    embed_images    = bool(cfg.get("embedImages", True))
+    show_dataframes = bool(cfg.get("showDataFrames", True))
+    show_warnings   = bool(cfg.get("showWarnings", False))
+    add_toc         = bool(cfg.get("addToc", False))
+    add_captions    = bool(cfg.get("addCaptions", True))
 
     # TOC
-    add_toc = bool(cfg.get("addToc", False))
     if add_toc:
         doc.add_heading("Table of Contents", level=2)
         _insert_toc(doc)
 
-    add_captions = bool(cfg.get("addCaptions", False))
-    code_cell_count = 0
     figure_count = 0
 
     for cell in nb.cells:
-        source = cell.get("source", "") or ""
+        source   = cell.get("source", "") or ""
         cell_type = cell.get("cell_type", "")
 
         if cell_type == "markdown":
@@ -281,47 +521,54 @@ def convert_notebook(file_bytes: bytes, cfg: Dict[str, Any]) -> bytes:
                 _process_markdown(doc, source)
 
         elif cell_type == "code":
-            code_cell_count += 1
+            exec_count = cell.get("execution_count")
+
             if source.strip():
-                _add_code_cell(doc, source, code_cell_count)
+                _add_code_cell(doc, source, exec_count, syntax_color)
 
             for output in cell.get("outputs", []):
                 otype = output.get("output_type", "")
 
                 if otype == "stream":
+                    stream_name = output.get("name", "stdout")
                     text = "".join(output.get("text", []))
-                    if text.strip():
-                        _add_text_output(doc, text)
+                    if stream_name == "stderr":
+                        if show_warnings and text.strip():
+                            _add_text_output(doc, text, shaded=True)
+                    else:
+                        if text.strip():
+                            _add_text_output(doc, text, shaded=False)
 
                 elif otype in ("display_data", "execute_result"):
                     data = output.get("data", {})
 
                     embedded_image = False
-                    for mime in ("image/png", "image/jpeg", "image/gif"):
-                        if mime in data:
-                            figure_count += 1
-                            caption = f"Figure {figure_count}" if add_captions else None
-                            _add_image_output(doc, data[mime], caption)
-                            embedded_image = True
-                            break
+                    if embed_images:
+                        for mime in ("image/png", "image/jpeg", "image/gif"):
+                            if mime in data:
+                                figure_count += 1
+                                caption = f"Figure {figure_count}" if add_captions else None
+                                _add_image_output(doc, data[mime], caption)
+                                embedded_image = True
+                                break
 
-                    if not embedded_image and "text/plain" in data:
-                        text = "".join(data["text/plain"])
+                    if not embedded_image:
+                        text = "".join(data.get("text/plain", []))
                         if text.strip():
-                            if re.search(r"\s{2,}", text) and "\n" in text:
+                            if show_dataframes and re.search(r"\s{2,}", text) and text.count("\n") > 1:
                                 _add_dataframe_table(doc, text)
                             else:
-                                _add_text_output(doc, text)
+                                _add_text_output(doc, text, shaded=False)
 
                 elif otype == "error":
-                    ename = output.get("ename", "Error")
-                    evalue = output.get("evalue", "")
-                    para = doc.add_paragraph()
-                    run = para.add_run(f"{ename}: {evalue}")
-                    run.font.color.rgb = RGBColor(0xCC, 0x00, 0x00)
-                    run.font.name = "Courier New"
-                    run.font.size = Pt(9)
+                    ename  = _sanitize(output.get("ename", "Error"))
+                    evalue = _sanitize(output.get("evalue", ""))
+                    tb_lines = [_sanitize(l) for l in output.get("traceback", [])]
+                    err_text = f"{ename}: {evalue}"
+                    if tb_lines:
+                        err_text += "\n" + "\n".join(tb_lines[-5:])
+                    _add_text_output(doc, err_text, shaded=True)
 
-    out = io.BytesIO()
-    doc.save(out)
-    return out.getvalue()
+    buf = io.BytesIO()
+    doc.save(buf)
+    return buf.getvalue()
