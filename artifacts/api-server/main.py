@@ -1,19 +1,21 @@
 import os
 import io
 import json
-import tempfile
+import zipfile
 import traceback
 from pathlib import Path
 
 from fastapi import FastAPI, File, UploadFile, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse, JSONResponse
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
-from typing import Optional
+from typing import Optional, List
 
 from formatter import apply_formatting
 from nb_converter import convert_notebook
 from ai_hints import get_suggestion
+from cover_page import add_cover_page
+from docx import Document
 
 app = FastAPI(title="WordForge API")
 
@@ -46,38 +48,79 @@ async def format_doc(
 
     try:
         file_bytes = await file.read() if file else None
-        result = apply_formatting(file_bytes, cfg)
+        result_bytes = apply_formatting(file_bytes, cfg)
+
+        # Optionally prepend a cover page
+        cover_cfg = cfg.get("coverPage")
+        if cover_cfg and cover_cfg.get("enabled"):
+            doc = Document(io.BytesIO(result_bytes))
+            add_cover_page(doc, cover_cfg)
+            buf = io.BytesIO()
+            doc.save(buf)
+            result_bytes = buf.getvalue()
+
+        filename = cfg.get("filename", "submission.docx")
+        if not filename.endswith(".docx"):
+            filename += ".docx"
+
         return StreamingResponse(
-            io.BytesIO(result),
+            io.BytesIO(result_bytes),
             media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={"Content-Disposition": "attachment; filename=wordforge_formatted.docx"},
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# ── Convert notebook ──────────────────────────────────────────────────────────
+# ── Convert notebook(s) ───────────────────────────────────────────────────────
 
 @app.post("/api/convert-notebook")
 async def convert_nb(
     settings: str = Form("{}"),
-    file: UploadFile = File(...),
+    files: List[UploadFile] = File(...),
 ):
     try:
         cfg = json.loads(settings)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid settings JSON")
 
+    if not files:
+        raise HTTPException(status_code=400, detail="No files uploaded")
+
+    if len(files) > 5:
+        raise HTTPException(status_code=400, detail="Maximum 5 notebooks per batch")
+
     try:
-        file_bytes = await file.read()
-        result = convert_notebook(file_bytes, cfg)
-        filename = Path(file.filename or "notebook").stem + ".docx"
-        return StreamingResponse(
-            io.BytesIO(result),
-            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            headers={"Content-Disposition": f"attachment; filename={filename}"},
-        )
+        if len(files) == 1:
+            # Single file — return docx directly
+            f = files[0]
+            file_bytes = await f.read()
+            result = convert_notebook(file_bytes, cfg)
+            stem = Path(f.filename or "notebook").stem
+            filename = cfg.get("filename") or f"{stem}.docx"
+            if not filename.endswith(".docx"):
+                filename += ".docx"
+            return StreamingResponse(
+                io.BytesIO(result),
+                media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+            )
+        else:
+            # Batch — return zip
+            zip_buf = io.BytesIO()
+            with zipfile.ZipFile(zip_buf, "w", zipfile.ZIP_DEFLATED) as zf:
+                for f in files:
+                    file_bytes = await f.read()
+                    result = convert_notebook(file_bytes, cfg)
+                    stem = Path(f.filename or "notebook").stem
+                    zf.writestr(f"{stem}.docx", result)
+            zip_buf.seek(0)
+            return StreamingResponse(
+                zip_buf,
+                media_type="application/zip",
+                headers={"Content-Disposition": 'attachment; filename="notebooks.zip"'},
+            )
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

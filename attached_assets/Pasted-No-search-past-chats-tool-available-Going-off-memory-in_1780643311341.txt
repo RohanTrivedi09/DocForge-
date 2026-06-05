@@ -1,0 +1,204 @@
+No "search past chats" tool available. Going off memory instead — from last week's docx work context I have stored.
+
+From memory, key pain points from Gujarat Police SOP + academic doc formatting:
+
+- Heading colors not applying correctly → had to inspect XML directly
+- Had to verify hex values from reference XML (not trust any guide)
+- Table styles, image placement, logical content sequencing were recurring fixes
+- Chapter structure (H1/H2/H3 hierarchy) kept breaking
+- Separate formatting rules per chapter (Ch6 Central Workshop, Ch9 GPDTI)
+
+---
+
+Good app name options:
+
+| Name | Vibe |
+|---|---|
+| **DocForge** | Clean, strong, memorable |
+| **FormatIQ** | Smart angle |
+| **PageCraft** | Student-friendly |
+| **SubmitReady** | Literally what it does |
+| **DocSmith** | Craft angle |
+
+**Pick: `DocForge`** — covers both formatter + notebook converter, sounds like a real product.
+
+---
+
+Here's the final Replit prompt:
+
+---
+
+Build a full-stack web app called **DocForge** — a smart academic document formatter and `.ipynb` to `.docx` converter built for college students.
+
+---
+
+## Stack
+
+- **Frontend:** React (Vite) + Tailwind CSS
+- **Backend:** FastAPI (Python)
+- **Key libs:** `python-docx`, `nbformat`, `mistletoe`, `Pillow`, `lxml`
+- **AI:** Google Gemini API (`gemini-2.0-flash`) for contextual suggestions
+
+---
+
+## Critical backend requirement — heading colors and font colors
+
+This is the most common failure point in `python-docx`. When applying heading colors or body font colors, **do not rely on named styles alone**. Directly manipulate the XML run properties:
+
+```python
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+from docx.shared import RGBColor, Pt
+
+def apply_heading_style(paragraph, level, size_pt, hex_color):
+    run = paragraph.runs[0] if paragraph.runs else paragraph.add_run(paragraph.text)
+    run.font.size = Pt(size_pt)
+    run.font.color.rgb = RGBColor.from_string(hex_color.lstrip('#'))
+    # Also set via XML to ensure it survives style inheritance
+    rPr = run._r.get_or_add_rPr()
+    color_el = OxmlElement('w:color')
+    color_el.set(qn('w:val'), hex_color.lstrip('#').upper())
+    rPr.append(color_el)
+```
+
+Same pattern must be applied for body font color — do not assume style-level color will propagate to runs.
+
+---
+
+## Feature 1 — Word Formatter
+
+User uploads existing `.docx` OR starts fresh. Full formatting control panel:
+
+**Typography:**
+- Font family (Times New Roman, Arial, Calibri, Georgia, Cambria)
+- Body font size (pt) + body font color (hex + picker)
+- H1, H2, H3, H4 — individual size (pt) + individual color (hex + picker)
+- Line spacing (1.0 / 1.15 / 1.5 / 2.0)
+- Paragraph spacing before/after (pt)
+- Page margins top/bottom/left/right (cm) — convert to EMU correctly: `cm * 914400 / 2.54` → then to `Cm()` using `docx.shared.Cm`
+
+**Header & Footer:**
+- Header text input
+- Footer text input
+- Page number toggle + position (left/center/right)
+- Different first page toggle
+- Different odd/even pages toggle — **must wire to python-docx `sections[0].different_odd_even_pages = True`** and set both `header` and `even_page_header`
+
+**Preset Templates (one-click load):**
+- `GTU Standard` — TNR 12pt, H1=16pt black, H2=14pt black, H3=12pt bold, 1.5 spacing, 2.5cm margins
+- `Adani University` — same base, H1 color `#1F3864`, H2 color `#2E74B5`
+- `IEEE` — Times New Roman 10pt, two-column note, single spacing, 2cm margins
+- `APA 7th` — TNR 12pt, double spacing, 2.54cm margins
+
+**Cover Page Generator:**
+- Fields: Title, Student Name, Roll Number, Subject, Department, University Name, Date
+- Generates a styled first page before document content
+- Uses H1 style for title, body style for other fields, centered alignment
+
+**Custom filename input** before download — default `submission.docx`
+
+**Export:** Download formatted `.docx`
+
+---
+
+## Feature 2 — `.ipynb` to `.docx` Converter
+
+Upload `.ipynb` → download `.docx` with:
+
+- **Markdown cells** → proper Word paragraphs. Parse with `mistletoe`. Map: `#` → H1, `##` → H2, `###` → H3, bold/italic preserved, bullet lists → Word list paragraphs
+- **Code cells** → `Courier New` 10pt, paragraph shading `#F2F2F2`, label "[ Code Cell N ]" above in gray italic
+- **Text outputs** → `Courier New` 10pt, shading `#FFFBE6` (light yellow to distinguish from code)
+- **Image outputs** (matplotlib base64 PNG) → decode and embed via `docx.add_picture`, max width 14cm
+- **DataFrame outputs** → render as Word table, first row bold header, alternating row shading `#F7F7F7`
+- **Empty output cells** → skip silently, no error
+- **Table of Contents option** — toggle: if ON, insert TOC field at start (requires Word to update on open — add a note to user)
+- Cell sequence preserved exactly as in notebook
+
+Also expose basic margin/font settings same as formatter tab.
+
+**Batch convert:** Allow uploading up to 5 `.ipynb` files → downloads as `.zip` of `.docx` files
+
+---
+
+## AI Suggestions (Gemini API)
+
+Use `gemini-2.0-flash`. Non-blocking dismissible toast notifications. Trigger:
+
+| Trigger | Suggestion |
+|---|---|
+| Header field focused | "Want different headers on odd and even pages? Standard for dissertations and reports." |
+| H1 size set > 20pt | Suggest a complementary H2 size (return actual number) |
+| H1 and H2 same size | "H1 and H2 are the same size — headings won't be distinguishable in output." |
+| Dark body font color selected (luminance < 0.3, not black) | "Dark tint selected — want a matching shaded background on section headers?" |
+| Line spacing = 2.0 | "Double spacing selected. Most Indian university submissions require 1.5 — confirm this is intentional?" |
+| No header text entered on export | "Many universities require department name or subject in the header." |
+| Footer left + page number | "Consider 'Page X of Y' format instead of just page number?" |
+| ipynb uploaded with > 10 cells | "Long notebook detected — want a Table of Contents added at the start?" |
+| ipynb with images | "Notebook has plot outputs — want auto-captions like 'Figure 1' added below each?" |
+
+---
+
+## UI Layout
+
+- **Top bar:** DocForge logo + "Formatter" tab + "Notebook Converter" tab
+- **Formatter tab:** Left panel = controls, Right panel = live HTML preview (approximate, add label "Preview is approximate — final output may vary")
+- **Notebook tab:** Upload zone center, settings below, convert button
+- **AI toast:** Bottom-right corner, dismissible, one at a time
+- Bottom of both tabs: filename input + Download button
+
+---
+
+## API Routes (FastAPI)
+
+```
+POST /format-doc         ← multipart: docx file (optional) + settings JSON → returns .docx
+POST /convert-notebook   ← multipart: ipynb file(s) + settings JSON → returns .docx or .zip
+POST /ai-suggest         ← JSON: { trigger: string, context: object } → returns suggestion string
+```
+
+---
+
+## Folder Structure
+
+```
+/docforge
+  /frontend
+    src/
+      App.jsx
+      components/
+        FormatterPanel.jsx
+        NotebookConverter.jsx
+        PreviewPane.jsx
+        AISuggestion.jsx
+        CoverPageForm.jsx
+        PresetTemplates.jsx
+  /backend
+    main.py
+    formatter.py        ← python-docx logic, heading/color XML fix included
+    nb_converter.py     ← ipynb → docx conversion
+    ai_hints.py         ← Gemini API calls
+    cover_page.py       ← cover page generator
+  requirements.txt
+```
+
+---
+
+## requirements.txt
+
+```
+fastapi
+uvicorn
+python-docx
+lxml
+nbformat
+mistletoe
+Pillow
+google-generativeai
+python-multipart
+```
+
+---
+
+## Defaults on load (Indian university standard)
+
+Times New Roman, 12pt body, black body color, H1=16pt `#1F3864`, H2=14pt `#2E74B5`, H3=12pt bold black, H4=11pt bold black, 1.5 line spacing, 2.5cm all margins, no header/footer text, page numbers centered in footer.
