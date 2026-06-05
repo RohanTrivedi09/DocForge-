@@ -455,7 +455,7 @@ def _add_dataframe_table(doc: Document, text: str):
             if ci >= max_cols:
                 break
             cell = row.cells[ci]
-            cell.text = cell_text.strip()
+            cell.text = _sanitize(cell_text.strip())
             for para in cell.paragraphs:
                 for run in para.runs:
                     run.font.size = Pt(10)
