@@ -1,0 +1,129 @@
+Here's the full prompt to paste into Replit AI chat:
+
+---
+
+Build a full-stack web app called **WordForge** — a smart Word document formatter + `.ipynb` to `.docx` converter for college students.
+
+---
+
+## Stack
+
+- **Frontend:** React (Vite) + Tailwind CSS
+- **Backend:** FastAPI (Python)
+- **Key libs:** `python-docx`, `nbformat`, `mistletoe` (markdown parser), `Pillow` (image handling)
+- **AI:** Anthropic API (`claude-sonnet-4-20250514`) for contextual suggestions
+
+---
+
+## Feature 1 — Word Formatter
+
+User uploads an existing `.docx` OR starts fresh. They get a full formatting control panel:
+
+**Typography controls:**
+- Font family selector (dropdown: Times New Roman, Arial, Calibri, etc.)
+- Font color picker (hex input + color wheel) — per heading level and body
+- Heading sizes (H1, H2, H3, H4) — individual pt number inputs
+- Line spacing selector (1.0 / 1.15 / 1.5 / 2.0)
+- Paragraph spacing (before/after in pt)
+- Page margins (top/bottom/left/right in cm)
+
+**Header & Footer editor:**
+- Text input for header content
+- Text input for footer content
+- Page number toggle (position: left/center/right)
+- Option for different first page header/footer
+- Option for different odd/even page header/footer
+
+**Export:**
+- Download reformatted `.docx`
+
+---
+
+## Feature 2 — `.ipynb` to `.docx` Converter
+
+User uploads a Jupyter notebook (`.ipynb`). The app converts it to a properly formatted Word document:
+
+- **Markdown cells** → proper Word paragraphs with heading levels, bold, italic, lists preserved
+- **Code cells** → monospace font (Courier New), light gray background shading, labeled as "Code"
+- **Output cells** → plain text outputs embedded as styled text; matplotlib/plot images embedded as actual images in the doc
+- **DataFrame outputs** → rendered as Word tables with borders
+- All cell outputs appear in order, matching notebook flow
+
+---
+
+## AI Suggestions (Anthropic API)
+
+Call `claude-sonnet-4-20250514` for smart UX hints. Trigger suggestions contextually:
+
+- User focuses on **header input field** → AI suggests: *"Want different headers on odd and even pages? Common for academic reports."*
+- User sets **H1 size > 20pt** → AI suggests a complementary H2 size
+- User picks a **dark font color** → AI asks if they want a matching dark section header background
+- User uploads **ipynb with >10 cells** → AI suggests adding a Table of Contents page
+- User selects **double line spacing** → AI notes: *"Most Indian university submissions require 1.5 spacing — confirm?"*
+
+Display suggestions as non-blocking toast/sidebar hints. User can accept or dismiss.
+
+---
+
+## UI Layout
+
+- Left panel: controls / settings
+- Right panel: live preview (render a simplified HTML preview of the doc structure — headings, body text, header/footer zones)
+- Top bar: "Formatter" tab and "Notebook Converter" tab
+- Bottom: Export / Download button
+
+---
+
+## API Routes (FastAPI backend)
+
+```
+POST /format-doc        ← upload docx + settings JSON → returns formatted docx
+POST /convert-notebook  ← upload ipynb + settings JSON → returns docx
+POST /ai-suggest        ← sends context string → returns suggestion text from Claude
+```
+
+---
+
+## Folder Structure
+
+```
+/wordforge
+  /frontend
+    src/
+      App.jsx
+      components/
+        FormatterPanel.jsx
+        NotebookConverter.jsx
+        PreviewPane.jsx
+        AISuggestion.jsx
+  /backend
+    main.py
+    formatter.py       ← python-docx formatting logic
+    nb_converter.py    ← ipynb → docx conversion logic
+    ai_hints.py        ← Anthropic API calls
+  requirements.txt
+```
+
+---
+
+## requirements.txt
+
+```
+fastapi
+uvicorn
+python-docx
+nbformat
+mistletoe
+Pillow
+anthropic
+python-multipart
+```
+
+---
+
+## Notes
+
+- Keep AI suggestions non-blocking — never interrupt the user's workflow, just hint
+- The `.ipynb` converter should handle notebooks that have no outputs gracefully (skip empty output cells)
+- Default formatting preset on load: Times New Roman, 12pt body, H1=16pt, H2=14pt, H3=12pt bold, 1.5 line spacing, 2.5cm margins — standard Indian university submission format
+- Mobile responsive is a bonus but desktop-first is fine
