@@ -8,6 +8,15 @@ import re
 import base64
 from typing import Dict, Any, Optional
 
+# Matches ANSI/VT100 escape sequences (e.g. colour codes printed by tqdm etc.)
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*[mGKHF]|\x1b\[[?][0-9;]*[hl]|\x1b\[[\x30-\x3f]*[\x20-\x2f]*[\x40-\x7e]|\x1b.")
+
+def _sanitize(text: str) -> str:
+    """Remove ANSI escape codes and XML-illegal control characters from text."""
+    text = _ANSI_RE.sub("", text)
+    # Strip NULL bytes and C0/C1 control chars except tab, newline, carriage return
+    return "".join(ch for ch in text if ch == "\t" or ch == "\n" or ch == "\r" or (ord(ch) >= 0x20 and ord(ch) != 0x7F))
+
 import nbformat
 from docx import Document
 from docx.shared import Pt, RGBColor, Cm
@@ -164,7 +173,7 @@ def _add_code_cell(doc: Document, source: str, cell_number: int):
 # ── Text output (light yellow background) ─────────────────────────────────────
 
 def _add_text_output(doc: Document, text: str):
-    for line in text.split("\n"):
+    for line in _sanitize(text).split("\n"):
         if not line.strip():
             continue
         para = doc.add_paragraph()
