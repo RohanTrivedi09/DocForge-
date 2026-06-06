@@ -1,0 +1,426 @@
+Here's the Replit prompt to add this as a built-in template:
+
+---
+
+Add a new preset template called **"Gujarat Govt. SOP"** to the WordForge Formatter tab. This is a government document standard — all values are non-negotiable and verified from reference XML. Do not approximate any color or size value.
+
+---
+
+## 1. Add to preset templates list
+
+In the frontend `PresetTemplates.jsx` (or wherever presets are defined), add:
+
+```javascript
+const PRESET_TEMPLATES = {
+  // ...existing presets...
+  'gujarat_govt_sop': {
+    label: 'Gujarat Govt. SOP',
+    icon: '🏛️',
+    description: 'Gujarat State Police — Standard Operating Procedure format',
+    settings: {
+      fontFamily: 'Times New Roman',
+      pageSize: 'A4',
+      orientation: 'portrait',
+      margins: { top: 2.54, bottom: 2.54, left: 2.54, right: 2.54 }, // 1 inch = 2.54cm
+      bodySize: 12,
+      bodyColor: '#000000',
+      bodyAlignment: 'justify',
+      lineSpacing: 1.5,
+      spacingAfter: 6,
+      spacingBefore: 0,
+      firstLineIndent: 0,
+      h1Size: 14, h1Color: '#000080', h1Bold: true,
+      h2Size: 14, h2Color: '#C00000', h2Bold: true,
+      h3Size: 12, h3Color: '#1F4D78', h3Bold: true,
+      h4Size: 12, h4Color: '#1F4D78', h4Bold: true,
+    }
+  }
+};
+```
+
+---
+
+## 2. Backend — Gujarat Govt SOP document spec
+
+In `formatter.py`, when preset is `gujarat_govt_sop`, apply all of the following. These override any user-supplied values.
+
+### Page setup
+```python
+from docx.shared import Inches, Pt, RGBColor, Cm
+from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+
+section = doc.sections[0]
+section.page_width  = Inches(8.27)   # A4
+section.page_height = Inches(11.69)  # A4
+section.left_margin   = Inches(1)
+section.right_margin  = Inches(1)
+section.top_margin    = Inches(1)
+section.bottom_margin = Inches(1)
+```
+
+### Body text style
+```python
+from docx.shared import Pt, RGBColor
+from docx.oxml import OxmlElement
+from docx.oxml.ns import qn
+
+def apply_body_style(paragraph):
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    pf = paragraph.paragraph_format
+    pf.line_spacing = Pt(12 * 1.5)   # 1.5 × 12pt
+    pf.space_after  = Pt(6)
+    pf.space_before = Pt(0)
+    pf.first_line_indent = Pt(0)
+    for run in paragraph.runs:
+        run.font.name = 'Times New Roman'
+        run.font.size = Pt(12)
+        run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
+```
+
+### Heading colors — XML-level enforcement (non-negotiable)
+```python
+HEADING_SPEC = {
+    1: {'size': 14, 'color': '000080', 'bold': True},
+    2: {'size': 14, 'color': 'C00000', 'bold': True},
+    3: {'size': 12, 'color': '1F4D78', 'bold': True},
+}
+
+def apply_heading_sop(paragraph, level):
+    spec = HEADING_SPEC.get(level, HEADING_SPEC[3])
+    paragraph.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    pf = paragraph.paragraph_format
+    pf.space_before = Pt(12)
+    pf.space_after  = Pt(6)
+    for run in paragraph.runs:
+        run.font.name  = 'Times New Roman'
+        run.font.size  = Pt(spec['size'])
+        run.font.bold  = spec['bold']
+        # XML-level color — bypasses style inheritance
+        run.font.color.rgb = RGBColor.from_string(spec['color'])
+        rPr = run._r.get_or_add_rPr()
+        for existing in rPr.findall(qn('w:color')):
+            rPr.remove(existing)
+        color_el = OxmlElement('w:color')
+        color_el.set(qn('w:val'), spec['color'].upper())
+        rPr.append(color_el)
+```
+
+### Cover page
+```python
+def generate_sop_cover(doc, chapter_number, chapter_title):
+    # Blank space to push content ~40% down
+    for _ in range(8):
+        doc.add_paragraph()
+
+    # "Chapter N"
+    p1 = doc.add_paragraph()
+    p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r1 = p1.add_run(f'Chapter {chapter_number}')
+    r1.font.name = 'Times New Roman'
+    r1.font.size = Pt(24)
+    r1.font.bold = True
+    r1.font.color.rgb = RGBColor(0x1A, 0x36, 0x5D)
+
+    # Chapter title
+    p2 = doc.add_paragraph()
+    p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r2 = p2.add_run(chapter_title)
+    r2.font.name = 'Times New Roman'
+    r2.font.size = Pt(18)
+    r2.font.bold = True
+    r2.font.color.rgb = RGBColor(0x00, 0x20, 0x60)
+
+    # "Standard Operating Procedure"
+    p3 = doc.add_paragraph()
+    p3.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r3 = p3.add_run('Standard Operating Procedure')
+    r3.font.name = 'Times New Roman'
+    r3.font.size = Pt(14)
+    r3.font.italic = True
+    r3.font.color.rgb = RGBColor(0x00, 0x20, 0x60)
+
+    # "Gujarat State Police Wireless Grid"
+    p4 = doc.add_paragraph()
+    p4.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    r4 = p4.add_run('Gujarat State Police Wireless Grid')
+    r4.font.name = 'Times New Roman'
+    r4.font.size = Pt(12)
+    r4.font.color.rgb = RGBColor(0x1A, 0x36, 0x5D)
+
+    # Page break after cover
+    doc.add_page_break()
+
+    # Cover page has NO header — set first page different
+    section = doc.sections[0]
+    section.different_first_page_header_footer = True
+    section.first_page_header.paragraphs[0].clear()
+```
+
+### Running header (all pages except cover)
+```python
+def set_sop_running_header(section, chapter_title_caps):
+    header = section.header
+    para = header.paragraphs[0]
+    para.clear()
+
+    run = para.add_run(chapter_title_caps.upper())
+    run.font.name = 'Times New Roman'
+    run.font.size = Pt(10)
+    run.font.bold = True
+    run.font.italic = True
+    run.font.color.rgb = RGBColor(0x00, 0x00, 0x80)
+
+    # Navy bottom border under header
+    pPr = para._p.get_or_add_pPr()
+    pBdr = OxmlElement('w:pBdr')
+    bottom = OxmlElement('w:bottom')
+    bottom.set(qn('w:val'), 'single')
+    bottom.set(qn('w:sz'), '4')
+    bottom.set(qn('w:space'), '1')
+    bottom.set(qn('w:color'), '000080')
+    pBdr.append(bottom)
+    pPr.append(pBdr)
+```
+
+### Bullet / list items
+```python
+def add_sop_bullet(doc, text):
+    para = doc.add_paragraph()
+    para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    pf = para.paragraph_format
+    pf.left_indent     = Inches(0.4)
+    pf.first_line_indent = Inches(-0.2)  # hanging indent
+    pf.space_after  = Pt(6)
+    pf.line_spacing = Pt(18)  # 1.5 × 12pt
+
+    run = para.add_run(f'-> {text}')
+    run.font.name = 'Times New Roman'
+    run.font.size = Pt(12)
+    run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
+```
+
+### Special paragraph labels
+```python
+def add_objective_para(doc, label, body_text):
+    """Objective: [bold italic navy] followed by regular body text."""
+    para = doc.add_paragraph()
+    para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    apply_body_style(para)
+
+    label_run = para.add_run(label + ' ')  # e.g. "Objective: "
+    label_run.font.name   = 'Times New Roman'
+    label_run.font.size   = Pt(12)
+    label_run.font.bold   = True
+    label_run.font.italic = True
+    label_run.font.color.rgb = RGBColor(0x00, 0x00, 0x80)
+
+    body_run = para.add_run(body_text)
+    body_run.font.name  = 'Times New Roman'
+    body_run.font.size  = Pt(12)
+    body_run.font.bold  = False
+    body_run.font.italic = False
+    body_run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
+
+def add_reference_para(doc, body_text):
+    """Reference: [bold navy] followed by regular body text."""
+    para = doc.add_paragraph()
+    para.alignment = WD_ALIGN_PARAGRAPH.JUSTIFY
+    apply_body_style(para)
+
+    label_run = para.add_run('Reference: ')
+    label_run.font.name  = 'Times New Roman'
+    label_run.font.size  = Pt(12)
+    label_run.font.bold  = True
+    label_run.font.color.rgb = RGBColor(0x00, 0x00, 0x80)
+
+    body_run = para.add_run(body_text)
+    body_run.font.name  = 'Times New Roman'
+    body_run.font.size  = Pt(12)
+    body_run.font.bold  = False
+    body_run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
+```
+
+### Tables
+```python
+def add_sop_table(doc, headers, rows):
+    table = doc.add_table(rows=1 + len(rows), cols=len(headers))
+    table.style = 'Table Grid'
+
+    # Full width = 9026 twips (A4, 1" margins)
+    tbl = table._tbl
+    tblPr = tbl.find(qn('w:tblPr')) or OxmlElement('w:tblPr')
+    tblW = OxmlElement('w:tblW')
+    tblW.set(qn('w:w'), '9026')
+    tblW.set(qn('w:type'), 'dxa')
+    tblPr.append(tblW)
+
+    def set_cell_shading(cell, fill_hex):
+        tc_pr = cell._tc.get_or_add_tcPr()
+        shd = OxmlElement('w:shd')
+        shd.set(qn('w:val'),   'clear')
+        shd.set(qn('w:color'), 'auto')
+        shd.set(qn('w:fill'),  fill_hex.lstrip('#').upper())
+        tc_pr.append(shd)
+
+    def set_cell_padding(cell):
+        tc_pr = cell._tc.get_or_add_tcPr()
+        mar = OxmlElement('w:tcMar')
+        for side in ['top', 'bottom']:
+            el = OxmlElement(f'w:{side}')
+            el.set(qn('w:w'), '80')
+            el.set(qn('w:type'), 'dxa')
+            mar.append(el)
+        for side in ['left', 'right']:
+            el = OxmlElement(f'w:{side}')
+            el.set(qn('w:w'), '120')
+            el.set(qn('w:type'), 'dxa')
+            mar.append(el)
+        tc_pr.append(mar)
+
+    # Header row — #2C5282 fill, white bold text
+    hdr_row = table.rows[0]
+    for i, h in enumerate(headers):
+        cell = hdr_row.cells[i]
+        cell.text = ''
+        set_cell_shading(cell, '2C5282')
+        set_cell_padding(cell)
+        run = cell.paragraphs[0].add_run(h)
+        run.font.name  = 'Times New Roman'
+        run.font.size  = Pt(10)
+        run.font.bold  = True
+        run.font.color.rgb = RGBColor(0xFF, 0xFF, 0xFF)
+
+    # Body rows — #F7FAFC fill, black text
+    for r_idx, row_data in enumerate(rows):
+        row = table.rows[r_idx + 1]
+        for c_idx, val in enumerate(row_data):
+            cell = row.cells[c_idx]
+            cell.text = ''
+            set_cell_shading(cell, 'F7FAFC')
+            set_cell_padding(cell)
+            run = cell.paragraphs[0].add_run(str(val))
+            run.font.name  = 'Times New Roman'
+            run.font.size  = Pt(10)
+            run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
+```
+
+### Citations / references
+```python
+def add_citation(doc, text):
+    para = doc.add_paragraph()
+    para.alignment = WD_ALIGN_PARAGRAPH.LEFT
+    pf = para.paragraph_format
+    pf.space_before = Pt(0)
+    pf.space_after  = Pt(6)
+    run = para.add_run(text)
+    run.font.name   = 'Times New Roman'
+    run.font.size   = Pt(10)
+    run.font.italic = True
+    run.font.color.rgb = RGBColor(0x40, 0x40, 0x40)
+```
+
+---
+
+## 3. Annexure titles
+
+Annexure section titles use same spec as H1:
+```python
+ANNEXURE_SPEC = {'size': 14, 'color': '000080', 'bold': True}
+# Apply using same apply_heading_sop() function with level=1
+```
+
+---
+
+## 4. Content paste endpoint
+
+Add a new API route specifically for this template:
+
+```
+POST /format-sop
+Body (multipart):
+  - content: str          ← raw chapter text pasted by user
+  - chapter_number: str   ← e.g. "6"
+  - chapter_title: str    ← e.g. "Wireless Grid Operations"
+  - reference_docx: file  ← optional — if uploaded, unpack XML first and
+                             verify all hex color values before generating.
+                             Never trust formatting guide docs.
+Returns: .docx file
+```
+
+**Reference docx XML verification (when uploaded):**
+```python
+import zipfile, re
+
+def extract_and_verify_colors(docx_path):
+    """Unpack docx XML and extract all hex color values used."""
+    found_colors = {}
+    with zipfile.ZipFile(docx_path) as z:
+        for name in z.namelist():
+            if name.endswith('.xml'):
+                content = z.read(name).decode('utf-8', errors='ignore')
+                colors = re.findall(r'w:color[^/]*/?>.*?w:val="([0-9A-Fa-f]{6})"', content)
+                for c in colors:
+                    found_colors[c.upper()] = found_colors.get(c.upper(), 0) + 1
+    return found_colors
+    # Log these — compare against spec before generating
+    # If mismatch found, return warning to frontend before proceeding
+```
+
+---
+
+## 5. UI — Gujarat Govt SOP fields in Formatter tab
+
+When user selects **Gujarat Govt. SOP** preset, show additional fields below the preset buttons:
+
+```
+┌─── SOP Document Info ──────────────────────────────┐
+│ Chapter Number  [ 6        ]                        │
+│ Chapter Title   [ Wireless Grid Operations        ] │
+│ [ ] Upload reference .docx to verify colors        │
+│     (recommended — overrides any format guide)      │
+└─────────────────────────────────────────────────────┘
+```
+
+These feed into the `/format-sop` endpoint.
+
+---
+
+## 6. Validation after generation
+
+After generating the docx, run a post-generation check:
+```python
+def validate_sop_output(doc):
+    issues = []
+    para_count = len(doc.paragraphs)
+    h1_count = sum(1 for p in doc.paragraphs if p.style.name == 'Heading 1')
+    h2_count = sum(1 for p in doc.paragraphs if p.style.name == 'Heading 2')
+    # Check heading colors on first run of each heading
+    for p in doc.paragraphs:
+        if p.style.name in ('Heading 1', 'Heading 2', 'Heading 3'):
+            if p.runs:
+                color = p.runs[0].font.color.rgb
+                expected = {
+                    'Heading 1': '000080',
+                    'Heading 2': 'C00000',
+                    'Heading 3': '1F4D78'
+                }[p.style.name]
+                if str(color).upper() != expected.upper():
+                    issues.append(f'{p.style.name} color mismatch: got {color}, expected {expected}')
+    return {
+        'paragraph_count': para_count,
+        'h1_count': h1_count,
+        'h2_count': h2_count,
+        'issues': issues
+    }
+```
+
+Return this validation report in the API response alongside the docx download. Show it in the UI as a small summary:
+```
+✅ Generated: 47 paragraphs · 6 H1 · 12 H2 · 0 color mismatches
+```
+
+---
+
+Do not modify any existing templates or existing formatter logic. Add Gujarat Govt. SOP as an additive preset only.

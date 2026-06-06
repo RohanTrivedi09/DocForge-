@@ -15,6 +15,7 @@ from formatter import apply_formatting
 from nb_converter import convert_notebook
 from ai_hints import get_suggestion
 from cover_page import add_cover_page
+from sop_formatter import generate_sop_document
 from docx import Document
 
 app = FastAPI(title="WordForge API")
@@ -121,6 +122,39 @@ async def convert_nb(
                 media_type="application/zip",
                 headers={"Content-Disposition": 'attachment; filename="notebooks.zip"'},
             )
+    except Exception as e:
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ── Format SOP (Gujarat Govt.) ────────────────────────────────────────────────
+
+@app.post("/api/format-sop")
+async def format_sop(
+    chapter_number: str = Form("1"),
+    chapter_title: str = Form(""),
+    content: str = Form(""),
+    reference_docx: Optional[UploadFile] = File(None),
+):
+    try:
+        ref_bytes = await reference_docx.read() if reference_docx else None
+        docx_bytes, report = generate_sop_document(
+            content=content,
+            chapter_number=chapter_number,
+            chapter_title=chapter_title,
+            reference_docx_bytes=ref_bytes,
+        )
+        import json as _json
+        filename = f"SOP_Chapter_{chapter_number}.docx"
+        return StreamingResponse(
+            io.BytesIO(docx_bytes),
+            media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "X-SOP-Validation": _json.dumps(report),
+                "Access-Control-Expose-Headers": "X-SOP-Validation",
+            },
+        )
     except Exception as e:
         traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))

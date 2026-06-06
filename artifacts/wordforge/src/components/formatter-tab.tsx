@@ -42,6 +42,13 @@ const PRESETS = {
     lineSpacing: "2.0", spacingBefore: 0, spacingAfter: 0,
     marginTop: 2.54, marginBottom: 2.54, marginLeft: 2.54, marginRight: 2.54,
   },
+  "Gujarat Govt. SOP": {
+    fontFamily: "Times New Roman", bodySize: 12, bodyColor: "#000000",
+    h1Size: 14, h1Color: "#000080", h2Size: 14, h2Color: "#C00000",
+    h3Size: 12, h3Color: "#1F4D78", h4Size: 12, h4Color: "#1F4D78",
+    lineSpacing: "1.5", spacingBefore: 0, spacingAfter: 6,
+    marginTop: 2.54, marginBottom: 2.54, marginLeft: 2.54, marginRight: 2.54,
+  },
 } as const;
 
 type SettingsKey =
@@ -115,6 +122,15 @@ export function FormatterTab() {
 
   const [isFormatting, setIsFormatting] = useState(false);
 
+  // Gujarat Govt. SOP specific state
+  const [activePreset, setActivePreset] = useState<string | null>(null);
+  const [sopChapterNumber, setSopChapterNumber] = useState("1");
+  const [sopChapterTitle, setSopChapterTitle] = useState("");
+  const [sopContent, setSopContent] = useState("");
+  const [sopRefFile, setSopRefFile] = useState<File | null>(null);
+  const sopRefInputRef = useRef<HTMLInputElement>(null);
+  const isSOP = activePreset === "Gujarat Govt. SOP";
+
   // Auto-fill cover page from profile on mount
   useEffect(() => {
     const profile = loadProfile();
@@ -187,6 +203,52 @@ export function FormatterTab() {
   const handleHeaderFocus = () => fireOnce("header_focus", "header_focus");
 
   const handleFormat = async () => {
+    // ── Gujarat Govt. SOP path ────────────────────────────────────────────────
+    if (isSOP) {
+      if (!sopChapterTitle.trim()) {
+        toast.error("Enter a Chapter Title before generating the SOP");
+        return;
+      }
+      setIsFormatting(true);
+      try {
+        const formData = new FormData();
+        formData.append("chapter_number", sopChapterNumber);
+        formData.append("chapter_title", sopChapterTitle);
+        formData.append("content", sopContent);
+        if (sopRefFile) formData.append("reference_docx", sopRefFile);
+
+        const response = await fetch("/api/format-sop", { method: "POST", body: formData });
+        if (!response.ok) throw new Error("SOP generation failed");
+
+        // Show validation report from response header
+        const validationRaw = response.headers.get("X-SOP-Validation");
+        const blob = await response.blob();
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement("a");
+        a.href = url;
+        a.download = `SOP_Chapter_${sopChapterNumber}.docx`;
+        document.body.appendChild(a); a.click();
+        URL.revokeObjectURL(url); document.body.removeChild(a);
+
+        if (validationRaw) {
+          try {
+            const v = JSON.parse(validationRaw);
+            const issues = (v.issues || []).length;
+            const msg = `✅ Generated: ${v.paragraph_count} paragraphs · ${v.h1_count} H1 · ${v.h2_count} H2 · ${issues === 0 ? "0 color mismatches" : `⚠ ${issues} color issue(s)`}`;
+            toast.success(msg, { duration: 8000 });
+          } catch {}
+        } else {
+          toast.success("SOP document generated and downloaded");
+        }
+      } catch {
+        toast.error("Failed to generate SOP document");
+      } finally {
+        setIsFormatting(false);
+      }
+      return;
+    }
+
+    // ── Standard formatter path ───────────────────────────────────────────────
     if (settings.headerText === "") fireOnce("no_header_export", "no_header_export");
 
     setIsFormatting(true);
@@ -222,6 +284,7 @@ export function FormatterTab() {
   const applyPreset = (name: keyof typeof PRESETS) => {
     const p = PRESETS[name];
     setSettings((prev) => ({ ...prev, ...p }));
+    setActivePreset(name);
     toast.success(`Preset applied: ${name}`);
   };
 
@@ -353,18 +416,65 @@ export function FormatterTab() {
             {/* Preset templates */}
             <AccordionItem value="presets">
               <AccordionTrigger className="hover:no-underline font-medium text-sm">Preset Templates</AccordionTrigger>
-              <AccordionContent className="pt-2">
+              <AccordionContent className="pt-2 space-y-3">
                 <div className="grid grid-cols-2 gap-2">
                   {(Object.keys(PRESETS) as (keyof typeof PRESETS)[]).map((name) => (
-                    <Button key={name} variant="outline" size="sm" className="h-8 text-xs"
+                    <Button key={name} variant={activePreset === name ? "secondary" : "outline"}
+                      size="sm" className="h-8 text-xs"
                       onClick={() => applyPreset(name)}>
-                      {name}
+                      {name === "Gujarat Govt. SOP" ? "🏛️ " : ""}{name}
                     </Button>
                   ))}
                 </div>
-                <p className="text-xs text-muted-foreground mt-2">
+                <p className="text-xs text-muted-foreground">
                   One click loads all settings for that standard.
                 </p>
+
+                {/* ── SOP-specific fields ── */}
+                {isSOP && (
+                  <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-3">
+                    <p className="text-xs font-semibold text-amber-800 uppercase tracking-wider">
+                      🏛️ SOP Document Info
+                    </p>
+                    <div className="grid grid-cols-[80px_1fr] gap-2 items-center">
+                      <Label className="text-xs">Chapter No.</Label>
+                      <Input className="h-8 text-sm" value={sopChapterNumber}
+                        onChange={(e) => setSopChapterNumber(e.target.value)}
+                        placeholder="e.g. 6" />
+                    </div>
+                    <div className="grid grid-cols-[80px_1fr] gap-2 items-center">
+                      <Label className="text-xs">Chapter Title</Label>
+                      <Input className="h-8 text-sm" value={sopChapterTitle}
+                        onChange={(e) => setSopChapterTitle(e.target.value)}
+                        placeholder="e.g. Wireless Grid Operations" />
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Chapter Content</Label>
+                      <textarea
+                        className="w-full h-28 rounded-md border border-input bg-background px-3 py-2 text-xs font-mono resize-y focus:outline-none focus:ring-1 focus:ring-ring"
+                        placeholder={"Paste your chapter text here.\n\n# H1 Heading\n## H2 Heading\n### H3 Heading\n-> Bullet item\nObjective: ...\nReference: ...\n\nRegular body text..."}
+                        value={sopContent}
+                        onChange={(e) => setSopContent(e.target.value)}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Supports: # H1/H2/H3, -&gt; bullets, Objective:, Reference:, pipe tables
+                      </p>
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Reference .docx (optional)</Label>
+                      <input type="file" accept=".docx" className="hidden" ref={sopRefInputRef}
+                        onChange={(e) => setSopRefFile(e.target.files?.[0] || null)} />
+                      <Button variant="outline" size="sm" className="w-full h-8 text-xs justify-start gap-2"
+                        onClick={() => sopRefInputRef.current?.click()}>
+                        <Upload className="w-3.5 h-3.5" />
+                        {sopRefFile ? sopRefFile.name : "Upload to verify colors..."}
+                      </Button>
+                      {sopRefFile && (
+                        <p className="text-xs text-green-700">✓ Colors will be verified from reference</p>
+                      )}
+                    </div>
+                  </div>
+                )}
               </AccordionContent>
             </AccordionItem>
 
