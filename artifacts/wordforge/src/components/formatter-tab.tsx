@@ -1,5 +1,5 @@
-import { useState, useRef } from "react";
-import { Download, Upload, Eye, Settings, AlignLeft, AlignCenter, AlignRight } from "lucide-react";
+import { useState, useRef, useEffect } from "react";
+import { Download, Upload, Eye, Settings, AlignLeft, AlignCenter, AlignRight, FileDown, FileUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,6 +8,7 @@ import { ResizablePanelGroup, ResizablePanel, ResizableHandle } from "@/componen
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { toast } from "sonner";
 import { useAiSuggest } from "@workspace/api-client-react";
+import { ProfileSection, loadProfile } from "@/components/profile-section";
 
 const SELECT_CLS =
   "flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm ring-offset-background focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
@@ -52,39 +53,52 @@ type SettingsKey =
   | "headerText" | "footerText" | "pageNumbers" | "pageNumberPos"
   | "pageXofY" | "diffFirstPage" | "diffOddEven";
 
+const SETTINGS_STORAGE_KEY = "docforge_last_settings";
+
+const DEFAULT_SETTINGS = {
+  fontFamily: "Times New Roman",
+  bodySize: 12,
+  bodyColor: "#000000",
+  h1Size: 16,
+  h1Color: "#1F3864",
+  h2Size: 14,
+  h2Color: "#2E74B5",
+  h3Size: 12,
+  h3Color: "#000000",
+  h4Size: 11,
+  h4Color: "#000000",
+  lineSpacing: "1.5",
+  spacingBefore: 0,
+  spacingAfter: 6,
+  marginTop: 2.5,
+  marginBottom: 2.5,
+  marginLeft: 2.5,
+  marginRight: 2.5,
+  headerText: "",
+  footerText: "",
+  pageNumbers: true,
+  pageNumberPos: "center",
+  pageXofY: false,
+  diffFirstPage: false,
+  diffOddEven: false,
+};
+
+function loadLastSettings() {
+  try {
+    const raw = localStorage.getItem(SETTINGS_STORAGE_KEY);
+    if (raw) return { ...DEFAULT_SETTINGS, ...JSON.parse(raw) };
+  } catch {}
+  return DEFAULT_SETTINGS;
+}
+
 export function FormatterTab() {
   const [file, setFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const importRef = useRef<HTMLInputElement>(null);
   const suggest = useAiSuggest();
   const triggeredHints = useRef<Set<string>>(new Set());
 
-  const [settings, setSettings] = useState({
-    fontFamily: "Times New Roman",
-    bodySize: 12,
-    bodyColor: "#000000",
-    h1Size: 16,
-    h1Color: "#1F3864",
-    h2Size: 14,
-    h2Color: "#2E74B5",
-    h3Size: 12,
-    h3Color: "#000000",
-    h4Size: 11,
-    h4Color: "#000000",
-    lineSpacing: "1.5",
-    spacingBefore: 0,
-    spacingAfter: 6,
-    marginTop: 2.5,
-    marginBottom: 2.5,
-    marginLeft: 2.5,
-    marginRight: 2.5,
-    headerText: "",
-    footerText: "",
-    pageNumbers: true,
-    pageNumberPos: "center",
-    pageXofY: false,
-    diffFirstPage: false,
-    diffOddEven: false,
-  });
+  const [settings, setSettings] = useState(loadLastSettings);
 
   const [filename, setFilename] = useState("submission.docx");
 
@@ -100,6 +114,19 @@ export function FormatterTab() {
   });
 
   const [isFormatting, setIsFormatting] = useState(false);
+
+  // Auto-fill cover page from profile on mount
+  useEffect(() => {
+    const profile = loadProfile();
+    if (profile) {
+      setCoverPage((p) => ({
+        ...p,
+        studentName: p.studentName || profile.name,
+        universityName: p.universityName || profile.university,
+        department: p.department || profile.department,
+      }));
+    }
+  }, []);
 
   const triggerHint = (trigger: string, context = "") => {
     suggest.mutate(
@@ -164,11 +191,7 @@ export function FormatterTab() {
 
     setIsFormatting(true);
     try {
-      const payload = {
-        ...settings,
-        filename,
-        coverPage,
-      };
+      const payload = { ...settings, filename, coverPage };
       const formData = new FormData();
       if (file) formData.append("file", file);
       formData.append("settings", JSON.stringify(payload));
@@ -185,6 +208,9 @@ export function FormatterTab() {
       a.click();
       URL.revokeObjectURL(url);
       document.body.removeChild(a);
+
+      // Auto-save settings to localStorage on every download
+      localStorage.setItem(SETTINGS_STORAGE_KEY, JSON.stringify(settings));
       toast.success("Document formatted and downloaded");
     } catch {
       toast.error("Failed to format document");
@@ -199,6 +225,89 @@ export function FormatterTab() {
     toast.success(`Preset applied: ${name}`);
   };
 
+  const handleExportSettings = () => {
+    const json = JSON.stringify({
+      fontFamily: settings.fontFamily,
+      bodySize: settings.bodySize,
+      bodyColor: settings.bodyColor,
+      headings: {
+        h1: { size: settings.h1Size, color: settings.h1Color },
+        h2: { size: settings.h2Size, color: settings.h2Color },
+        h3: { size: settings.h3Size, color: settings.h3Color },
+        h4: { size: settings.h4Size, color: settings.h4Color },
+      },
+      lineSpacing: settings.lineSpacing,
+      spacingBefore: settings.spacingBefore,
+      spacingAfter: settings.spacingAfter,
+      margins: {
+        top: settings.marginTop,
+        bottom: settings.marginBottom,
+        left: settings.marginLeft,
+        right: settings.marginRight,
+      },
+      headerText: settings.headerText,
+      footerText: settings.footerText,
+      pageNumbers: settings.pageNumbers,
+      pageNumberPosition: settings.pageNumberPos,
+      pageXofY: settings.pageXofY,
+      differentFirstPage: settings.diffFirstPage,
+      differentOddEven: settings.diffOddEven,
+    }, null, 2);
+    const blob = new Blob([json], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url; a.download = "docforge_settings.json";
+    document.body.appendChild(a); a.click();
+    URL.revokeObjectURL(url); document.body.removeChild(a);
+    toast.success("Settings exported");
+  };
+
+  const handleImportSettings = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    if (!f) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const parsed = JSON.parse(ev.target?.result as string);
+        const h = parsed.headings || {};
+        const m = parsed.margins || {};
+        setSettings((prev) => ({
+          ...prev,
+          fontFamily: parsed.fontFamily ?? prev.fontFamily,
+          bodySize: parsed.bodySize ?? prev.bodySize,
+          bodyColor: parsed.bodyColor ?? prev.bodyColor,
+          h1Size: h.h1?.size ?? prev.h1Size,
+          h1Color: h.h1?.color ?? prev.h1Color,
+          h2Size: h.h2?.size ?? prev.h2Size,
+          h2Color: h.h2?.color ?? prev.h2Color,
+          h3Size: h.h3?.size ?? prev.h3Size,
+          h3Color: h.h3?.color ?? prev.h3Color,
+          h4Size: h.h4?.size ?? prev.h4Size,
+          h4Color: h.h4?.color ?? prev.h4Color,
+          lineSpacing: parsed.lineSpacing ?? prev.lineSpacing,
+          spacingBefore: parsed.spacingBefore ?? prev.spacingBefore,
+          spacingAfter: parsed.spacingAfter ?? prev.spacingAfter,
+          marginTop: m.top ?? prev.marginTop,
+          marginBottom: m.bottom ?? prev.marginBottom,
+          marginLeft: m.left ?? prev.marginLeft,
+          marginRight: m.right ?? prev.marginRight,
+          headerText: parsed.headerText ?? prev.headerText,
+          footerText: parsed.footerText ?? prev.footerText,
+          pageNumbers: parsed.pageNumbers ?? prev.pageNumbers,
+          pageNumberPos: parsed.pageNumberPosition ?? prev.pageNumberPos,
+          pageXofY: parsed.pageXofY ?? prev.pageXofY,
+          diffFirstPage: parsed.differentFirstPage ?? prev.diffFirstPage,
+          diffOddEven: parsed.differentOddEven ?? prev.diffOddEven,
+        }));
+        toast.success("Settings imported");
+      } catch {
+        toast.error("Invalid settings file");
+      }
+    };
+    reader.readAsText(f);
+    e.target.value = "";
+  };
+
   return (
     <ResizablePanelGroup direction="horizontal" className="h-full flex-1 rounded-none border-none">
       {/* ── Controls Panel ── */}
@@ -209,6 +318,19 @@ export function FormatterTab() {
         </div>
 
         <div className="flex-1 overflow-y-auto p-4 custom-scrollbar">
+
+          {/* Profile */}
+          <ProfileSection
+            onProfileLoad={(profile) => {
+              setCoverPage((p) => ({
+                ...p,
+                studentName: p.studentName || profile.name,
+                universityName: p.universityName || profile.university,
+                department: p.department || profile.department,
+              }));
+            }}
+          />
+
           <Accordion type="multiple" defaultValue={["typography", "layout", "header-footer"]} className="w-full">
 
             {/* Source file */}
@@ -464,6 +586,17 @@ export function FormatterTab() {
           <Button className="w-full font-semibold gap-2" size="lg" onClick={handleFormat} disabled={isFormatting}>
             {isFormatting ? "Formatting..." : <><Download className="w-4 h-4" />Format & Download .docx</>}
           </Button>
+          <div className="flex gap-2">
+            <input type="file" accept=".json" className="hidden" ref={importRef} onChange={handleImportSettings} />
+            <Button variant="outline" size="sm" className="flex-1 gap-1.5 text-xs h-8"
+              onClick={() => importRef.current?.click()}>
+              <FileUp className="w-3.5 h-3.5" /> Import Settings
+            </Button>
+            <Button variant="outline" size="sm" className="flex-1 gap-1.5 text-xs h-8"
+              onClick={handleExportSettings}>
+              <FileDown className="w-3.5 h-3.5" /> Export Settings
+            </Button>
+          </div>
         </div>
       </ResizablePanel>
 
@@ -513,34 +646,24 @@ export function FormatterTab() {
               <p style={{ marginBottom: `${settings.spacingAfter}pt` }}>
                 This is how your body text will appear. Spacing, font size, and family update live. Indian universities typically require Times New Roman 12pt with 1.5 line spacing.
               </p>
-              <h2 className="font-bold" style={{ fontSize: `${settings.h2Size}pt`, color: settings.h2Color, marginTop: `${settings.spacingBefore + 12}pt`, marginBottom: `${settings.spacingAfter}pt` }}>
+              <h2 className="font-bold" style={{ fontSize: `${settings.h2Size}pt`, color: settings.h2Color, marginBottom: `${settings.spacingAfter}pt` }}>
                 1.1 Section Heading
               </h2>
               <p style={{ marginBottom: `${settings.spacingAfter}pt` }}>
-                Proper heading hierarchy is essential for academic documents. Notice how the margins define the text block.
+                Another paragraph of body text with the same styling throughout. Heading colors appear above.
               </p>
-              <h3 className="font-bold" style={{ fontSize: `${settings.h3Size}pt`, color: settings.h3Color, marginTop: `${settings.spacingBefore + 8}pt`, marginBottom: `${settings.spacingAfter}pt` }}>
-                1.1.1 Subsection Details
+              <h3 className="font-bold" style={{ fontSize: `${settings.h3Size}pt`, color: settings.h3Color, marginBottom: `${settings.spacingAfter}pt` }}>
+                1.1.1 Subsection
               </h3>
               <p style={{ marginBottom: `${settings.spacingAfter}pt` }}>
-                WordForge applies these rules programmatically across every paragraph and heading — no manual clicking required.
+                Content under a subsection heading. Formatting rules apply consistently throughout.
               </p>
-              <h4 className="font-bold" style={{ fontSize: `${settings.h4Size}pt`, color: settings.h4Color, marginTop: `${settings.spacingBefore + 4}pt`, marginBottom: `${settings.spacingAfter}pt` }}>
-                1.1.1.1 Sub-subsection
-              </h4>
-              <p>Every level of the document hierarchy is independently configurable.</p>
             </div>
 
-            {/* Margin guides */}
-            <div className="absolute top-0 bottom-0 left-0 border-r border-blue-400/10 pointer-events-none" style={{ width: `${settings.marginLeft}cm` }} />
-            <div className="absolute top-0 bottom-0 right-0 border-l border-blue-400/10 pointer-events-none" style={{ width: `${settings.marginRight}cm` }} />
-            <div className="absolute left-0 right-0 top-0 border-b border-blue-400/10 pointer-events-none" style={{ height: `${settings.marginTop}cm` }} />
-            <div className="absolute left-0 right-0 bottom-0 border-t border-blue-400/10 pointer-events-none" style={{ height: `${settings.marginBottom}cm` }} />
+            <div className="absolute bottom-6 left-0 right-0 text-center text-gray-300 text-xs select-none pointer-events-none">
+              Preview is approximate — actual .docx may vary slightly
+            </div>
           </div>
-
-          <p className="text-xs text-muted-foreground">
-            Preview is approximate — final output may vary slightly from the downloaded .docx
-          </p>
         </div>
       </ResizablePanel>
     </ResizablePanelGroup>

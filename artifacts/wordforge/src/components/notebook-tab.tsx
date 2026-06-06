@@ -1,4 +1,4 @@
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { FileType, Upload, X, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -6,22 +6,39 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { useAiSuggest } from "@workspace/api-client-react";
+import { ProfileSection } from "@/components/profile-section";
 
 const SELECT_CLS =
   "flex h-9 w-full items-center justify-between whitespace-nowrap rounded-md border border-input bg-transparent px-3 py-2 text-sm shadow-sm ring-offset-background focus:outline-none focus:ring-1 focus:ring-ring disabled:cursor-not-allowed disabled:opacity-50";
 
+const LAB_STORAGE_KEY = "docforge_last_lab";
+
+function incrementLab(lab: string): string {
+  const m = lab.match(/^(.*?)(\d+)(.*)$/);
+  if (!m) return lab;
+  return `${m[1]}${parseInt(m[2]) + 1}${m[3]}`;
+}
+
+function loadLastLab(): string {
+  try {
+    const raw = localStorage.getItem(LAB_STORAGE_KEY);
+    if (raw) return incrementLab(raw);
+  } catch {}
+  return "Lab-1";
+}
+
 export function NotebookTab() {
-  const [files, setFiles]         = useState<File[]>([]);
+  const [files, setFiles]           = useState<File[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [isConverting, setIsConverting] = useState(false);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  const fileInputRef  = useRef<HTMLInputElement>(null);
   const triggeredHints = useRef<Set<string>>(new Set());
   const suggest = useAiSuggest();
 
-  // Document info
+  // Document info — pre-filled from profile/localStorage
   const [courseCode, setCourseCode] = useState("");
   const [subject, setSubject]       = useState("");
-  const [labNumber, setLabNumber]   = useState("Lab-1");
+  const [labNumber, setLabNumber]   = useState(loadLastLab);
   const [enrollNo, setEnrollNo]     = useState("");
 
   // Options
@@ -119,6 +136,11 @@ export function NotebookTab() {
       document.body.appendChild(a); a.click();
       URL.revokeObjectURL(url); document.body.removeChild(a);
 
+      // Store last lab number for auto-increment next visit
+      if (labNumber.trim()) {
+        localStorage.setItem(LAB_STORAGE_KEY, labNumber.trim());
+      }
+
       toast.success(isZip
         ? `${files.length} notebooks converted — downloaded as .zip`
         : "Notebook converted successfully");
@@ -142,6 +164,15 @@ export function NotebookTab() {
             Upload up to 5 .ipynb files. Single file → .docx · Multiple files → .zip
           </p>
         </div>
+
+        {/* ── Profile ── */}
+        <ProfileSection
+          onProfileLoad={(profile) => {
+            if (profile.courseCode) setCourseCode((prev) => prev || profile.courseCode);
+            if (profile.subject)    setSubject((prev) => prev || profile.subject);
+            if (profile.enrollNo)   setEnrollNo((prev) => prev || profile.enrollNo);
+          }}
+        />
 
         {/* ── Drop zone ── */}
         <div
@@ -206,6 +237,7 @@ export function NotebookTab() {
           </div>
           <p className="text-xs text-muted-foreground">
             These appear in the header (Course Code · Subject) and footer (Lab Number · Enrollment No.) on every page.
+            Lab number auto-increments each session.
           </p>
         </div>
 
@@ -285,11 +317,15 @@ export function NotebookTab() {
           <ul className="text-xs text-muted-foreground space-y-1 grid grid-cols-2 gap-x-4">
             <li>Markdown → headings & paragraphs</li>
             <li>Code → syntax-coloured gray blocks</li>
+            <li>Inline code → <code className="bg-gray-100 px-1 rounded">shaded Courier</code></li>
+            <li>Pipe tables → Word tables</li>
             <li>Text outputs → indented Courier text</li>
             <li>Plots → embedded 12 cm images</li>
             <li>DataFrames → Word tables</li>
-            <li>Stderr → yellow box (if enabled)</li>
-            <li>Errors → red Courier text</li>
+            <li>Magic/shell lines → gray italic</li>
+            <li>LaTeX $...$ → italic Courier fallback</li>
+            <li>Raw cells → plain body text</li>
+            <li>Errors → last 10 traceback lines</li>
             <li>Empty outputs → skipped</li>
           </ul>
         </div>

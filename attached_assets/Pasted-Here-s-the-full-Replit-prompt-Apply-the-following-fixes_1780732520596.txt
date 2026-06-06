@@ -1,0 +1,257 @@
+Here's the full Replit prompt:
+
+---
+
+Apply the following fixes and new features to the existing WordForge codebase. Do not rebuild anything already working — only add/fix what's listed below.
+
+---
+
+## Fix 1 — Heading colors must write to docx at XML run level
+
+Current issue: H1/H2/H3/H4 colors set via style-level don't apply to actual runs in the output docx. Fix by applying color directly to each run's XML after setting paragraph style:
+
+```python
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+from docx.shared import RGBColor, Pt
+
+def apply_run_color(run, hex_color):
+    """Force color onto run via XML — bypasses style inheritance"""
+    hex_clean = hex_color.lstrip('#').upper()
+    rPr = run._r.get_or_add_rPr()
+    # Remove existing color elements first
+    for existing in rPr.findall(qn('w:color')):
+        rPr.remove(existing)
+    color_el = OxmlElement('w:color')
+    color_el.set(qn('w:val'), hex_clean)
+    rPr.append(color_el)
+
+def apply_run_size(run, size_pt):
+    run.font.size = Pt(size_pt)
+    rPr = run._r.get_or_add_rPr()
+    for existing in rPr.findall(qn('w:sz')):
+        rPr.remove(existing)
+    for existing in rPr.findall(qn('w:szCs')):
+        rPr.remove(existing)
+    sz = OxmlElement('w:sz')
+    sz.set(qn('w:val'), str(int(size_pt * 2)))
+    szCs = OxmlElement('w:szCs')
+    szCs.set(qn('w:val'), str(int(size_pt * 2)))
+    rPr.append(sz)
+    rPr.append(szCs)
+```
+
+Apply `apply_run_color` and `apply_run_size` to every run in every heading paragraph — both in the formatter and the notebook converter. Also apply to body text runs for body font color.
+
+---
+
+## Fix 2 — Save Profile to localStorage (frontend only)
+
+Add a persistent user profile saved in localStorage. Profile fields:
+
+- Enrollment No.
+- Course Code
+- Subject
+- University Name
+- Student Name
+- Department
+
+**Where it appears:**
+- Notebook Converter tab: auto-fill Course Code, Subject, Lab Number prefix, Enrollment No. from saved profile on page load
+- Formatter tab: auto-fill University Name, Student Name, Department in cover page form on load
+
+**UI:**
+Add a small "Profile" section at the top of both tabs (collapsible, collapsed by default):
+
+```
+▸ My Profile (auto-fills forms)
+  Name: [___________]  Enrollment: [___________]
+  University: [___________]  Department: [___________]
+  [ Save Profile ]
+```
+
+On "Save Profile" click → `localStorage.setItem('docforge_profile', JSON.stringify(data))`.
+On page load → read profile and populate all matching fields silently.
+Show a small "Profile saved ✓" confirmation toast for 2 seconds.
+
+**Lab number auto-increment:**
+After a successful conversion, store the last used lab number in localStorage (`docforge_last_lab`). On next visit, parse the number from e.g. `Lab-7` → suggest `Lab-8` by pre-filling Lab Number field with incremented value. User can override freely.
+
+---
+
+## Fix 3 — Inline code rendering in markdown cells
+
+When parsing markdown cells, inline code (text wrapped in single backticks like `` `variable_name` ``) must render as a Word run with:
+- Font: Courier New
+- Font size: same as surrounding body text (10pt)
+- Background shading: `#E8E8E8` (light gray)
+
+Implementation in `nb_converter.py`:
+
+```python
+def add_inline_code_run(paragraph, text):
+    run = paragraph.add_run(text)
+    run.font.name = 'Courier New'
+    run.font.size = Pt(10)
+    # Apply character shading via XML
+    rPr = run._r.get_or_add_rPr()
+    rShd = OxmlElement('w:shd')
+    rShd.set(qn('w:val'), 'clear')
+    rShd.set(qn('w:color'), 'auto')
+    rShd.set(qn('w:fill'), 'E8E8E8')
+    rPr.append(rShd)
+```
+
+When parsing inline markdown content, detect backtick-wrapped segments and call `add_inline_code_run` for those segments, `paragraph.add_run(text)` for normal segments.
+
+---
+
+## Fix 4 — Markdown tables → Word tables
+
+When a markdown cell contains a pipe table like:
+
+```
+| Method | Samples/Update | Speed |
+|--------|---------------|-------|
+| Batch GD | All (1000) | Slow |
+| SGD | 1 | Fast |
+```
+
+Parse it and render as a Word table with:
+- First row: bold text, background fill `#D9D9D9`
+- Alternating data rows: white / `#F7F7F7`
+- All cells: thin single borders
+- Font: TNR 11pt
+
+```python
+def render_markdown_table(doc, lines):
+    # lines = list of pipe-separated rows, skip separator row (contains ---)
+    rows = [l for l in lines if not re.match(r'^\|[-| :]+\|$', l.strip())]
+    if not rows:
+        return
+    parsed = [[cell.strip() for cell in row.strip('|').split('|')] for row in rows]
+    col_count = max(len(r) for r in parsed)
+    table = doc.add_table(rows=len(parsed), cols=col_count)
+    table.style = 'Table Grid'
+    for i, row_data in enumerate(parsed):
+        for j, cell_text in enumerate(row_data):
+            cell = table.cell(i, j)
+            cell.text = cell_text
+            run = cell.paragraphs[0].runs[0] if cell.paragraphs[0].runs else cell.paragraphs[0].add_run(cell_text)
+            run.font.name = 'Times New Roman'
+            run.font.size = Pt(11)
+            if i == 0:
+                run.bold = True
+                set_cell_shading(cell, 'D9D9D9')
+            elif i % 2 == 0:
+                set_cell_shading(cell, 'F7F7F7')
+```
+
+Detect markdown tables in cell content before passing to mistletoe — if a block of lines starts with `|` and contains a separator row, route to `render_markdown_table` instead.
+
+---
+
+## Fix 5 — Magic command handling in code cells
+
+Jupyter magic commands and shell commands must not be passed to the Python tokenizer (they break syntax coloring and can cause crashes).
+
+Before tokenizing a code cell, preprocess lines:
+
+```python
+def preprocess_code_lines(source_lines):
+    processed = []
+    for line in source_lines:
+        stripped = line.strip()
+        if stripped.startswith('%%'):
+            # Cell magic — treat entire remaining cell as plain text
+            return [(line, 'magic') for line in source_lines]
+        elif stripped.startswith('%'):
+            # Line magic — render as comment-colored line
+            processed.append((line, 'magic'))
+        elif stripped.startswith('!'):
+            # Shell command — render as comment-colored line
+            processed.append((line, 'shell'))
+        else:
+            processed.append((line, 'code'))
+    return processed
+```
+
+Render `magic` and `shell` typed lines in italic gray (`#666666`) Courier New — visually distinct from normal code, not passed to tokenizer.
+
+---
+
+## Fix 6 — Export / Import settings as JSON
+
+**In the Formatter tab**, add two buttons next to the Download button:
+
+- `⬇ Export Settings` → serializes all current formatter settings (font, sizes, colors, margins, spacing, header/footer text, toggles) to a JSON file and downloads it as `docforge_settings.json`
+- `⬆ Import Settings` → file input accepting `.json`, reads and applies all settings to the UI instantly
+
+Settings JSON shape:
+```json
+{
+  "fontFamily": "Times New Roman",
+  "bodySize": 12,
+  "bodyColor": "#000000",
+  "headings": {
+    "h1": { "size": 16, "color": "#1F3864" },
+    "h2": { "size": 14, "color": "#2E74B5" },
+    "h3": { "size": 12, "color": "#000000" },
+    "h4": { "size": 11, "color": "#000000" }
+  },
+  "lineSpacing": 1.5,
+  "spacingBefore": 0,
+  "spacingAfter": 6,
+  "margins": { "top": 2.54, "bottom": 2.54, "left": 2.54, "right": 2.54 },
+  "headerText": "",
+  "footerText": "",
+  "pageNumbers": false,
+  "pageNumberPosition": "center",
+  "pageXofY": false,
+  "differentFirstPage": false,
+  "differentOddEven": false
+}
+```
+
+Also save last-used settings automatically to localStorage (`docforge_last_settings`) on every download — so settings persist across sessions without manual export.
+
+---
+
+## Fix 7 — LaTeX / Math graceful fallback
+
+When a markdown cell or code cell output contains LaTeX math expressions (`$...$` or `$$...$$`), handle gracefully:
+
+**Option A (preferred if matplotlib available on server):**
+Render math expression as PNG using matplotlib:
+```python
+import matplotlib.pyplot as plt
+import io, base64
+
+def latex_to_image(latex_str):
+    fig, ax = plt.subplots(figsize=(4, 0.8))
+    ax.text(0.5, 0.5, f'${latex_str}$', size=14, ha='center', va='center')
+    ax.axis('off')
+    buf = io.BytesIO()
+    fig.savefig(buf, format='png', bbox_inches='tight', dpi=150)
+    plt.close(fig)
+    buf.seek(0)
+    return buf
+```
+Embed resulting image inline at ~8cm width.
+
+**Option B (fallback):** If matplotlib render fails, strip `$` delimiters and render as italic Courier New text — never crash, never skip silently.
+
+Detect math in markdown by checking for `$` patterns before passing to mistletoe. Extract math segments, render each, insert as image runs in the paragraph.
+
+---
+
+## Also apply these small fixes while at it:
+
+- `raw` cell type in notebooks → render as plain TNR body text, not skipped
+- Long tracebacks → show last 5 lines by default + add "[ + show full traceback ]" toggle in the docx output as a note (or just increase to 10 lines)
+- Notebook title → read first H1 from markdown cells or use filename → set as Word document `core_properties.title` via `doc.core_properties.title = title`
+- Multi-output cells → preserve order: text output first, then images, then tables — match notebook display order exactly
+
+---
+
+Do not change any working UI layout, existing color schemes, or already-functioning conversion logic. Only add/patch what's described above.

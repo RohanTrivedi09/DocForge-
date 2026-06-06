@@ -226,20 +226,78 @@ def _insert_toc(doc: Document):
     doc.add_paragraph()
 
 
-# ── Inline markdown ───────────────────────────────────────────────────────────
+# ── Inline markdown helpers ───────────────────────────────────────────────────
+
+def _add_inline_code_run(para, text: str):
+    """Courier New + light gray background shading (#E8E8E8) for inline code."""
+    run = para.add_run(text)
+    run.font.name = "Courier New"
+    run.font.size = Pt(10)
+    rPr = run._r.get_or_add_rPr()
+    rShd = OxmlElement("w:shd")
+    rShd.set(qn("w:val"), "clear")
+    rShd.set(qn("w:color"), "auto")
+    rShd.set(qn("w:fill"), "E8E8E8")
+    rPr.append(rShd)
+    return run
+
 
 def _apply_inline_markdown(text: str, para):
-    parts = re.split(r"(\*\*.*?\*\*|\*.*?\*|`.*?`)", text)
+    # Split on bold, italic, inline code, and $...$  LaTeX
+    parts = re.split(r"(\*\*.*?\*\*|\*.*?\*|`.*?`|\$[^$\n]+?\$)", text)
     for part in parts:
         if part.startswith("**") and part.endswith("**"):
             r = para.add_run(part[2:-2]); r.bold = True
         elif part.startswith("*") and part.endswith("*"):
             r = para.add_run(part[1:-1]); r.italic = True
         elif part.startswith("`") and part.endswith("`"):
-            r = para.add_run(part[1:-1])
-            r.font.name = "Courier New"; r.font.size = Pt(10)
+            _add_inline_code_run(para, part[1:-1])
+        elif part.startswith("$") and part.endswith("$"):
+            # LaTeX math: strip delimiters, render as italic Courier fallback
+            math_text = part[1:-1]
+            r = para.add_run(math_text)
+            r.font.name = "Courier New"
+            r.font.size = Pt(10)
+            r.italic = True
         else:
             para.add_run(part)
+
+
+# ── Markdown pipe-table renderer ─────────────────────────────────────────────
+
+def _is_md_table_row(line: str) -> bool:
+    s = line.strip()
+    return s.startswith("|") and s.endswith("|") and len(s) > 2
+
+def _is_md_separator(line: str) -> bool:
+    return bool(re.match(r"^\|[-| :]+\|$", line.strip()))
+
+def _render_md_table(doc: Document, table_lines: List[str]):
+    rows_raw = [l for l in table_lines if not _is_md_separator(l)]
+    if not rows_raw:
+        return
+    parsed = [[c.strip() for c in row.strip("|").split("|")] for row in rows_raw]
+    col_count = max(len(r) for r in parsed)
+    table = doc.add_table(rows=len(parsed), cols=col_count)
+    table.style = "Table Grid"
+    _add_table_borders(table)
+    for ri, row_data in enumerate(parsed):
+        row = table.rows[ri]
+        if ri == 0:
+            _shade_row(row, "D9D9D9")
+        elif ri % 2 == 0:
+            _shade_row(row, "F7F7F7")
+        for ci in range(col_count):
+            cell_text = _sanitize(row_data[ci]) if ci < len(row_data) else ""
+            cell = row.cells[ci]
+            cell.text = cell_text
+            for para in cell.paragraphs:
+                for run in para.runs:
+                    run.font.name = "Times New Roman"
+                    run.font.size = Pt(11)
+                    if ri == 0:
+                        run.bold = True
+    doc.add_paragraph()
 
 
 # ── Markdown cell renderer ────────────────────────────────────────────────────
@@ -249,20 +307,50 @@ def _process_markdown(doc: Document, source: str):
     i = 0
     while i < len(lines):
         line = lines[i]
+
+        # Heading
         m = re.match(r"^(#{1,6})\s+(.*)", line)
         if m:
             doc.add_heading(m.group(2), level=min(len(m.group(1)), 4))
             i += 1; continue
+
+        # Pipe table — collect all consecutive pipe rows
+        if _is_md_table_row(line):
+            table_block = []
+            while i < len(lines) and (_is_md_table_row(lines[i]) or _is_md_separator(lines[i])):
+                table_block.append(lines[i])
+                i += 1
+            _render_md_table(doc, table_block)
+            continue
+
+        # Bullet list
         if re.match(r"^[-*+]\s+", line):
             para = doc.add_paragraph(style="List Bullet")
             _apply_inline_markdown(re.sub(r"^[-*+]\s+", "", line), para)
             i += 1; continue
+
+        # Numbered list
         if re.match(r"^\d+\.\s+", line):
             para = doc.add_paragraph(style="List Number")
             _apply_inline_markdown(re.sub(r"^\d+\.\s+", "", line), para)
             i += 1; continue
+
+        # Display math block $$...$$
+        if line.strip().startswith("$$"):
+            math_lines = []
+            i += 1
+            while i < len(lines) and not lines[i].strip().startswith("$$"):
+                math_lines.append(lines[i])
+                i += 1
+            i += 1  # skip closing $$
+            para = doc.add_paragraph()
+            r = para.add_run(" ".join(math_lines).strip())
+            r.font.name = "Courier New"; r.font.size = Pt(10); r.italic = True
+            continue
+
         if not line.strip():
             i += 1; continue
+
         para = doc.add_paragraph()
         _apply_inline_markdown(line, para)
         i += 1
@@ -316,6 +404,35 @@ def _tokenize_code(source: str) -> List[Tuple[int, int, int, str, Optional[RGBCo
     return segments
 
 
+_C_MAGIC = RGBColor(0x66, 0x66, 0x66)   # gray for magic/shell lines
+
+
+def _preprocess_code_lines(source: str) -> List[Tuple[str, str]]:
+    """
+    Returns list of (line_text, kind) where kind is 'code', 'magic', or 'shell'.
+    If a cell-magic (%%) is found, the entire source becomes magic lines.
+    """
+    raw_lines = source.split("\n")
+    result: List[Tuple[str, str]] = []
+    for line in raw_lines:
+        stripped = line.strip()
+        if stripped.startswith("%%"):
+            return [(l, "magic") for l in raw_lines]
+        elif stripped.startswith("%"):
+            result.append((line, "magic"))
+        elif stripped.startswith("!"):
+            result.append((line, "shell"))
+        else:
+            result.append((line, "code"))
+    return result
+
+
+def _add_magic_run(para, text: str):
+    r = para.add_run(text)
+    r.font.name = "Courier New"; r.font.size = Pt(10)
+    r.italic = True; r.font.color.rgb = _C_MAGIC
+
+
 def _add_code_cell(doc: Document, source: str, execution_count: Optional[int], syntax_color: bool):
     # Label: In [N]:
     label = doc.add_paragraph()
@@ -326,53 +443,64 @@ def _add_code_cell(doc: Document, source: str, execution_count: Optional[int], s
     lr.font.color.rgb = RGBColor(0x77, 0x77, 0x77)
     label.paragraph_format.space_after = Pt(0)
 
-    lines = (source or "").split("\n")
+    tagged = _preprocess_code_lines(source or "")
 
+    # Build a mapping: code-only row index → original tagged index
+    code_row_to_orig: Dict[int, int] = {}
+    code_row_idx = 0
+    for orig_idx, (_, kind) in enumerate(tagged):
+        if kind == "code":
+            code_row_to_orig[code_row_idx] = orig_idx
+            code_row_idx += 1
+
+    code_only_src = "\n".join(l for l, k in tagged if k == "code")
+
+    # Build token map keyed by original line index
+    by_orig_row: Dict[int, List[Tuple[int, int, str, Optional[RGBColor]]]] = {}
     if syntax_color:
-        segments = _tokenize_code(source or "")
-        # Group by row
-        by_row: Dict[int, List[Tuple[int, int, str, Optional[RGBColor]]]] = {}
-        for (row, cs, ce, txt, col) in segments:
-            by_row.setdefault(row, []).append((cs, ce, txt, col))
-        # Sort each row by col start
-        for row in by_row:
-            by_row[row].sort(key=lambda x: x[0])
+        segments = _tokenize_code(code_only_src)
+        for (code_row, cs, ce, txt, col) in segments:
+            orig_row = code_row_to_orig.get(code_row)
+            if orig_row is not None:
+                by_orig_row.setdefault(orig_row, []).append((cs, ce, txt, col))
+        for row in by_orig_row:
+            by_orig_row[row].sort(key=lambda x: x[0])
 
-        for li, raw_line in enumerate(lines):
-            para = doc.add_paragraph()
-            para.paragraph_format.space_before = Pt(0)
-            para.paragraph_format.space_after = Pt(0)
-            _set_para_shading(para, "F2F2F2")
+    for li, (raw_line, kind) in enumerate(tagged):
+        para = doc.add_paragraph()
+        para.paragraph_format.space_before = Pt(0)
+        para.paragraph_format.space_after = Pt(0)
+        _set_para_shading(para, "F2F2F2")
 
-            row_segs = by_row.get(li, [])
-            if not row_segs:
-                # No tokens on this line — write as plain
-                r = para.add_run(raw_line)
-                r.font.name = "Courier New"; r.font.size = Pt(10); r.font.color.rgb = _C_BLACK
-                continue
+        if kind in ("magic", "shell"):
+            _add_magic_run(para, raw_line)
+            continue
 
-            pos = 0
-            for (cs, ce, txt, color) in row_segs:
-                if cs > pos:
-                    gap = raw_line[pos:cs]
-                    if gap:
-                        r = para.add_run(gap)
-                        r.font.name = "Courier New"; r.font.size = Pt(10); r.font.color.rgb = _C_BLACK
-                r = para.add_run(txt)
-                r.font.name = "Courier New"; r.font.size = Pt(10)
-                if color: r.font.color.rgb = color
-                pos = ce
-            # tail
-            if pos < len(raw_line):
-                r = para.add_run(raw_line[pos:])
-                r.font.name = "Courier New"; r.font.size = Pt(10); r.font.color.rgb = _C_BLACK
-    else:
-        for raw_line in lines:
-            para = doc.add_paragraph()
-            para.paragraph_format.space_before = Pt(0)
-            para.paragraph_format.space_after = Pt(0)
-            _set_para_shading(para, "F2F2F2")
+        if not syntax_color:
             r = para.add_run(raw_line)
+            r.font.name = "Courier New"; r.font.size = Pt(10); r.font.color.rgb = _C_BLACK
+            continue
+
+        row_segs = by_orig_row.get(li, [])
+        if not row_segs:
+            r = para.add_run(raw_line)
+            r.font.name = "Courier New"; r.font.size = Pt(10); r.font.color.rgb = _C_BLACK
+            continue
+
+        pos = 0
+        for (cs, ce, txt, color) in row_segs:
+            if cs > pos:
+                gap = raw_line[pos:cs]
+                if gap:
+                    r = para.add_run(gap)
+                    r.font.name = "Courier New"; r.font.size = Pt(10); r.font.color.rgb = _C_BLACK
+            r = para.add_run(txt)
+            r.font.name = "Courier New"; r.font.size = Pt(10)
+            if color:
+                r.font.color.rgb = color
+            pos = ce
+        if pos < len(raw_line):
+            r = para.add_run(raw_line[pos:])
             r.font.name = "Courier New"; r.font.size = Pt(10); r.font.color.rgb = _C_BLACK
 
     doc.add_paragraph()
@@ -509,6 +637,19 @@ def convert_notebook(file_bytes: bytes, cfg: Dict[str, Any]) -> bytes:
 
     figure_count = 0
 
+    # Collect doc title from first H1 markdown cell
+    doc_title = ""
+    for cell in nb.cells:
+        if cell.get("cell_type") == "markdown":
+            src = cell.get("source", "") or ""
+            m = re.match(r"^#\s+(.+)", src.strip())
+            if m:
+                doc_title = m.group(1).strip()
+                break
+    if not doc_title:
+        doc_title = cfg.get("filename", "notebook").replace(".docx", "").replace("_", " ").title()
+    doc.core_properties.title = doc_title
+
     for cell in nb.cells:
         source   = cell.get("source", "") or ""
         cell_type = cell.get("cell_type", "")
@@ -516,6 +657,13 @@ def convert_notebook(file_bytes: bytes, cfg: Dict[str, Any]) -> bytes:
         if cell_type == "markdown":
             if source.strip():
                 _process_markdown(doc, source)
+
+        elif cell_type == "raw":
+            if source.strip():
+                para = doc.add_paragraph()
+                run = para.add_run(source)
+                run.font.name = "Times New Roman"
+                run.font.size = Pt(11)
 
         elif cell_type == "code":
             exec_count = cell.get("execution_count")
@@ -563,7 +711,7 @@ def convert_notebook(file_bytes: bytes, cfg: Dict[str, Any]) -> bytes:
                     tb_lines = [_sanitize(l) for l in output.get("traceback", [])]
                     err_text = f"{ename}: {evalue}"
                     if tb_lines:
-                        err_text += "\n" + "\n".join(tb_lines[-5:])
+                        err_text += "\n" + "\n".join(tb_lines[-10:])
                     _add_text_output(doc, err_text, shaded=True)
 
     buf = io.BytesIO()
