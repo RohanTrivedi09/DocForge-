@@ -215,7 +215,11 @@ export function FormatterTab() {
         formData.append("chapter_number", sopChapterNumber);
         formData.append("chapter_title", sopChapterTitle);
         formData.append("content", sopContent);
-        if (sopRefFile) formData.append("reference_docx", sopRefFile);
+        if (sopRefFile) {
+          formData.append("reference_docx", sopRefFile);
+        } else if (file) {
+          formData.append("reference_docx", file);
+        }
 
         const response = await fetch("/api/format-sop", { method: "POST", body: formData });
         if (!response.ok) throw new Error("SOP generation failed");

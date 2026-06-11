@@ -446,6 +446,60 @@ def validate_sop_output(doc: Document) -> dict:
     }
 
 
+def extract_content_from_docx(docx_bytes: bytes) -> str:
+    """Extract paragraphs and tables from docx bytes and convert to MD-like text representation."""
+    try:
+        doc = Document(io.BytesIO(docx_bytes))
+    except Exception:
+        return ""
+
+    from docx.oxml.table import CT_Tbl
+    from docx.oxml.text.paragraph import CT_P
+    from docx.table import Table
+    from docx.text.paragraph import Paragraph
+
+    lines = []
+
+    def process_element(element):
+        for child in element.iterchildren():
+            if isinstance(child, CT_P):
+                para = Paragraph(child, doc)
+                text = para.text.strip()
+                if not text:
+                    continue
+                # Map headings
+                style = para.style.name if para.style else "Normal"
+                if style.startswith("Heading 1"):
+                    lines.append(f"# {text}")
+                elif style.startswith("Heading 2"):
+                    lines.append(f"## {text}")
+                elif style.startswith("Heading 3"):
+                    lines.append(f"### {text}")
+                elif style.startswith("Heading 4"):
+                    lines.append(f"#### {text}")
+                elif style.startswith("List Bullet") or style.startswith("List"):
+                    lines.append(f"-> {text}")
+                elif text.lower().startswith("objective:"):
+                    lines.append(text)
+                elif text.lower().startswith("reference:"):
+                    lines.append(text)
+                else:
+                    lines.append(text)
+            elif isinstance(child, CT_Tbl):
+                table = Table(child, doc)
+                for row in table.rows:
+                    row_text = " | ".join(cell.text.strip().replace("\n", " ") for cell in row.cells)
+                    lines.append(f"| {row_text} |")
+                lines.append("")
+            elif child.tag.endswith('sdt'):
+                sdtContent = child.find(qn('w:sdtContent'))
+                if sdtContent is not None:
+                    process_element(sdtContent)
+
+    process_element(doc.element.body)
+    return "\n".join(lines)
+
+
 # ── Main entry point ───────────────────────────────────────────────────────────
 
 def generate_sop_document(
@@ -455,7 +509,7 @@ def generate_sop_document(
     reference_docx_bytes: Optional[bytes] = None,
 ) -> Tuple[bytes, dict]:
     """
-    Generate a Gujarat Govt. SOP .docx from pasted chapter content.
+    Generate a Gujarat Govt. SOP .docx from pasted chapter content or uploaded document.
     Returns (docx_bytes, validation_report).
     """
     doc = Document()
@@ -468,6 +522,10 @@ def generate_sop_document(
         section.right_margin  = Inches(1)
         section.top_margin    = Inches(1)
         section.bottom_margin = Inches(1)
+
+    # If content is empty but reference docx is uploaded, extract content from docx
+    if not content.strip() and reference_docx_bytes:
+        content = extract_content_from_docx(reference_docx_bytes)
 
     # Reference docx color verification (informational — logged in report)
     ref_colors: Dict[str, int] = {}
