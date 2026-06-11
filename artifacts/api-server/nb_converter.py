@@ -104,7 +104,10 @@ def _reset_para(para):
 
 
 def _fresh_hf_para(container):
-    """Get the first paragraph of a header/footer and strip it bare."""
+    """Get the first paragraph of a header/footer, strip it bare, and delete the rest."""
+    while len(container.paragraphs) > 1:
+        p_to_remove = container.paragraphs[-1]._p
+        p_to_remove.getparent().remove(p_to_remove)
     para = container.paragraphs[0]
     return _reset_para(para)
 
@@ -137,6 +140,8 @@ def _page_number_field(para):
     """Inline PAGE field — three consecutive runs (begin / instr / end)."""
     for ftype, content in [("begin", None), ("instr", " PAGE "), ("end", None)]:
         run = para.add_run()
+        run.font.name = "Times New Roman"
+        run.font.size = Pt(10)
         if ftype == "instr":
             el = OxmlElement("w:instrText")
             el.set(qn("xml:space"), "preserve")
@@ -248,8 +253,12 @@ def _apply_inline_markdown(text: str, para):
     for part in parts:
         if part.startswith("**") and part.endswith("**"):
             r = para.add_run(part[2:-2]); r.bold = True
+            r.font.name = "Times New Roman"
+            r.font.size = Pt(12)
         elif part.startswith("*") and part.endswith("*"):
             r = para.add_run(part[1:-1]); r.italic = True
+            r.font.name = "Times New Roman"
+            r.font.size = Pt(12)
         elif part.startswith("`") and part.endswith("`"):
             _add_inline_code_run(para, part[1:-1])
         elif part.startswith("$") and part.endswith("$"):
@@ -260,7 +269,9 @@ def _apply_inline_markdown(text: str, para):
             r.font.size = Pt(10)
             r.italic = True
         else:
-            para.add_run(part)
+            r = para.add_run(part)
+            r.font.name = "Times New Roman"
+            r.font.size = Pt(12)
 
 
 # ── Markdown pipe-table renderer ─────────────────────────────────────────────
@@ -300,6 +311,31 @@ def _render_md_table(doc: Document, table_lines: List[str]):
     doc.add_paragraph()
 
 
+def _apply_heading_runs(para, text: str, level: int):
+    """Format and enforce heading runs in Times New Roman, bold, and specific hex colors."""
+    _apply_inline_markdown(text, para)
+    HEADING_SPEC = {
+        1: {"size": 16, "color": "1F3864"},
+        2: {"size": 14, "color": "2E74B5"},
+        3: {"size": 12, "color": "000000"},
+        4: {"size": 11, "color": "000000"},
+    }
+    spec = HEADING_SPEC.get(level, {"size": 12, "color": "000000"})
+    for run in para.runs:
+        run.font.name = "Times New Roman"
+        run.font.size = Pt(spec["size"])
+        run.bold = True
+        
+        # Enforce color directly in run XML to survive style inheritance
+        h = spec["color"].upper()
+        rPr = run._r.get_or_add_rPr()
+        for existing in rPr.findall(qn("w:color")):
+            rPr.remove(existing)
+        color_el = OxmlElement("w:color")
+        color_el.set(qn("w:val"), h)
+        rPr.append(color_el)
+
+
 # ── Markdown cell renderer ────────────────────────────────────────────────────
 
 def _process_markdown(doc: Document, source: str):
@@ -311,7 +347,10 @@ def _process_markdown(doc: Document, source: str):
         # Heading
         m = re.match(r"^(#{1,6})\s+(.*)", line)
         if m:
-            doc.add_heading(m.group(2), level=min(len(m.group(1)), 4))
+            level = min(len(m.group(1)), 4)
+            heading = doc.add_heading(level=level)
+            heading.text = ""
+            _apply_heading_runs(heading, m.group(2), level)
             i += 1; continue
 
         # Pipe table — collect all consecutive pipe rows

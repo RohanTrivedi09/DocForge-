@@ -169,7 +169,7 @@ export function FormatterTab() {
   };
 
   const updateSetting = (key: SettingsKey, value: any) => {
-    setSettings((prev) => {
+    setSettings((prev: typeof DEFAULT_SETTINGS) => {
       const next = { ...prev, [key]: value };
 
       if (key === "h1Size" && value > 20) fireOnce("h1_large", "h1_large", `H1 size: ${value}pt`);
@@ -283,7 +283,7 @@ export function FormatterTab() {
 
   const applyPreset = (name: keyof typeof PRESETS) => {
     const p = PRESETS[name];
-    setSettings((prev) => ({ ...prev, ...p }));
+    setSettings((prev: typeof DEFAULT_SETTINGS) => ({ ...prev, ...p }));
     setActivePreset(name);
     toast.success(`Preset applied: ${name}`);
   };
@@ -334,7 +334,7 @@ export function FormatterTab() {
         const parsed = JSON.parse(ev.target?.result as string);
         const h = parsed.headings || {};
         const m = parsed.margins || {};
-        setSettings((prev) => ({
+        setSettings((prev: typeof DEFAULT_SETTINGS) => ({
           ...prev,
           fontFamily: parsed.fontFamily ?? prev.fontFamily,
           bodySize: parsed.bodySize ?? prev.bodySize,
