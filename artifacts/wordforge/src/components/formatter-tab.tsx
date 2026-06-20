@@ -167,11 +167,88 @@ export function FormatterTab() {
     }
   };
 
+  const parseIpynbForPreview = async (selectedFile: File) => {
+    setIsParsingDoc(true);
+    try {
+      const text = await selectedFile.text();
+      const notebook = JSON.parse(text);
+      const elements: any[] = [];
+      let execCount = 1;
+      
+      for (const cell of notebook.cells) {
+        if (!cell.source) continue;
+        const source = Array.isArray(cell.source) ? cell.source.join("") : cell.source;
+        
+        if (cell.cell_type === "markdown") {
+          // Simple markdown extraction
+          const lines = source.split("\n");
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed) continue;
+            
+            const hMatch = trimmed.match(/^(#{1,4})\s+(.*)/);
+            if (hMatch) {
+              elements.push({ type: `h${hMatch[1].length}`, text: hMatch[2] });
+              continue;
+            }
+            if (trimmed.startsWith("- ") || trimmed.startsWith("* ")) {
+              elements.push({ type: "bullet", text: trimmed.replace(/^[-*]\s+/, "") });
+              continue;
+            }
+            elements.push({ type: "paragraph", text: trimmed });
+          }
+        } else if (cell.cell_type === "code") {
+          const count = cell.execution_count || execCount++;
+          elements.push({ type: "code_label", text: `In [${count}]:` });
+          elements.push({ type: "code_block", text: source });
+          for (const output of cell.outputs || []) {
+            let outText = "";
+            if (output.output_type === "stream") {
+              outText = Array.isArray(output.text) ? output.text.join("") : output.text;
+            } else if (output.data && output.data["text/plain"]) {
+              outText = Array.isArray(output.data["text/plain"]) ? output.data["text/plain"].join("") : output.data["text/plain"];
+            }
+            if (outText) {
+              if (outText.includes("Layer (type)") && outText.includes("Output Shape") && outText.includes("Param #")) {
+                const lines = outText.split("\n");
+                const rows = [];
+                for (const line of lines) {
+                  if (line.match(/^[\s─═━┼╪╇┿┿┩┡├┝┢┣┳┻╋┫┨┯┷┏┓┗┛└┴┬]+$/)) continue;
+                  const cols = line.split(/[│┃|]/).map((c: string) => c.trim());
+                  if (cols.length > 0 && cols[0] === "") cols.shift();
+                  if (cols.length > 0 && cols[cols.length-1] === "") cols.pop();
+                  if (cols.length >= 3) {
+                    rows.push(cols.slice(0, 3));
+                  }
+                }
+                if (rows.length > 0) {
+                  elements.push({ type: "model_summary", rows });
+                  continue;
+                }
+              }
+              elements.push({ type: "code_output", text: outText });
+            }
+          }
+        }
+      }
+      setParsedDocContent(elements);
+    } catch (err) {
+      console.error("Failed to parse ipynb:", err);
+      toast.error("Could not parse notebook for live preview.");
+    } finally {
+      setIsParsingDoc(false);
+    }
+  };
+
   const handleMainFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const selectedFile = e.target.files?.[0] || null;
     setFile(selectedFile);
     if (selectedFile) {
-      await parseDocument(selectedFile);
+      if (selectedFile.name.endsWith(".ipynb")) {
+        await parseIpynbForPreview(selectedFile);
+      } else {
+        await parseDocument(selectedFile);
+      }
     } else {
       setParsedDocContent(null);
     }
@@ -1306,6 +1383,51 @@ export function FormatterTab() {
                                   <tr key={ri} style={{ backgroundColor: ri % 2 === 0 ? "#F7F7F7" : "#FFFFFF" }}>
                                     {row.map((val: any, ci: number) => (
                                       <td key={ci} className="p-2 border border-gray-200 text-black">{val}</td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        );
+                      }
+                      if (el.type === "code_label") {
+                        return (
+                          <div key={index} className="text-[#666666] font-bold mb-1" style={{ fontFamily: "Consolas", fontSize: "14pt" }}>
+                            {el.text}
+                          </div>
+                        );
+                      }
+                      if (el.type === "code_output") {
+                        return (
+                          <div key={index} className="mb-[12pt] whitespace-pre-wrap overflow-x-auto" style={{ fontFamily: "Courier New", fontSize: "11pt" }}>
+                            {el.text}
+                          </div>
+                        );
+                      }
+                      if (el.type === "code_block") {
+                        return (
+                          <div key={index} className="bg-[#FAFAFA] border border-[#CCCCCC] py-[4px] px-[10px] mb-[12pt] whitespace-pre-wrap overflow-x-auto w-full" style={{ fontFamily: "Consolas", fontSize: "14pt" }}>
+                            {el.text}
+                          </div>
+                        );
+                      }
+                      if (el.type === "model_summary") {
+                        return (
+                          <div key={index} className="mb-[12pt] overflow-x-auto w-full border border-[#CCCCCC]" style={{ fontFamily: "Consolas", fontSize: "14pt" }}>
+                            <table className="w-full text-left border-collapse bg-[#FAFAFA]">
+                              <thead>
+                                <tr>
+                                  {(el.rows[0] || []).map((h: string, i: number) => (
+                                    <th key={i} className="p-2 border border-[#CCCCCC] font-bold text-black">{h}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(el.rows.slice(1) || []).map((row: string[], ri: number) => (
+                                  <tr key={ri}>
+                                    {row.map((val: string, ci: number) => (
+                                      <td key={ci} className="p-2 border border-[#CCCCCC] text-black">{val}</td>
                                     ))}
                                   </tr>
                                 ))}
