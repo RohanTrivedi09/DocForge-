@@ -58,7 +58,7 @@ type SettingsKey =
   | "lineSpacing" | "spacingBefore" | "spacingAfter"
   | "marginTop" | "marginBottom" | "marginLeft" | "marginRight"
   | "headerText" | "footerText" | "pageNumbers" | "pageNumberPos"
-  | "pageXofY" | "diffFirstPage" | "diffOddEven";
+  | "pageXofY" | "diffFirstPage" | "diffOddEven" | "stripExistingHF";
 
 const SETTINGS_STORAGE_KEY = "docforge_last_settings";
 
@@ -88,6 +88,7 @@ const DEFAULT_SETTINGS = {
   pageXofY: false,
   diffFirstPage: false,
   diffOddEven: false,
+  stripExistingHF: false,
 };
 
 function loadLastSettings() {
@@ -121,6 +122,8 @@ export function FormatterTab() {
   });
 
   const [isFormatting, setIsFormatting] = useState(false);
+  const [isAnalyzing, setIsAnalyzing] = useState(false);
+  const [aiAnalysis, setAiAnalysis] = useState<any>(null);
 
   // Gujarat Govt. SOP specific state
   const [activePreset, setActivePreset] = useState<string | null>(null);
@@ -130,6 +133,114 @@ export function FormatterTab() {
   const [sopRefFile, setSopRefFile] = useState<File | null>(null);
   const sopRefInputRef = useRef<HTMLInputElement>(null);
   const isSOP = activePreset === "Gujarat Govt. SOP";
+
+  const [parsedDocContent, setParsedDocContent] = useState<any[] | null>(null);
+  const [isParsingDoc, setIsParsingDoc] = useState(false);
+
+  const parseDocument = async (selectedFile: File) => {
+    setIsParsingDoc(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", selectedFile);
+      const response = await fetch("/api/parse-doc", {
+        method: "POST",
+        body: formData,
+      });
+      if (!response.ok) throw new Error("Parsing failed");
+      const data = await response.json();
+      setParsedDocContent(data.elements || []);
+    } catch (err) {
+      console.error("Failed to parse document for preview:", err);
+      toast.error("Could not parse file for live preview. Showing default preview instead.");
+    } finally {
+      setIsParsingDoc(false);
+    }
+  };
+
+  const handleMainFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0] || null;
+    setFile(selectedFile);
+    if (selectedFile) {
+      await parseDocument(selectedFile);
+    } else {
+      setParsedDocContent(null);
+    }
+  };
+
+  const handleSopFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0] || null;
+    setSopRefFile(selectedFile);
+    if (selectedFile) {
+      await parseDocument(selectedFile);
+    } else if (!file) {
+      setParsedDocContent(null);
+    }
+  };
+
+  const parseSopTextForPreview = (text: string) => {
+    const lines = text.split("\n");
+    const elements: any[] = [];
+    let i = 0;
+    while (i < lines.length) {
+      const line = lines[i];
+      const stripped = line.trim();
+      if (!stripped) {
+        i++;
+        continue;
+      }
+      const headingMatch = stripped.match(/^(#{1,4})\s+(.*)/);
+      if (headingMatch) {
+        const level = headingMatch[1].length;
+        elements.push({ type: `h${level}`, text: headingMatch[2], level });
+        i++;
+        continue;
+      }
+      if (stripped.startsWith("|")) {
+        const tableLines: string[] = [];
+        while (i < lines.length && lines[i].trim().startsWith("|")) {
+          tableLines.push(lines[i].trim());
+          i++;
+        }
+        const rowsRaw = tableLines.filter((l) => !l.match(/^\|[-| :]+\|$/));
+        if (rowsRaw.length > 0) {
+          const parsed = rowsRaw.map((r) => r.replace(/^\||\|$/g, "").split("|").map((c) => c.trim()));
+          elements.push({
+            type: "table",
+            headers: parsed[0],
+            rows: parsed.slice(1),
+          });
+        }
+        continue;
+      }
+      if (stripped.match(/^(->\s+|-\s+|\*\s+)/)) {
+        const bulletText = stripped.replace(/^(->\s+|-\s+|\*\s+)/, "");
+        elements.push({ type: "bullet", text: bulletText });
+        i++;
+        continue;
+      }
+      const objMatch = stripped.match(/^(Objective\s*:)\s*(.*)/i);
+      if (objMatch) {
+        elements.push({ type: "objective", text: objMatch[2], label: objMatch[1] });
+        i++;
+        continue;
+      }
+      const refMatch = stripped.match(/^Reference\s*:\s*(.*)/i);
+      if (refMatch) {
+        elements.push({ type: "reference", text: refMatch[1] });
+        i++;
+        continue;
+      }
+      const citMatch = stripped.match(/^Citation\s*:\s*(.*)/i);
+      if (citMatch) {
+        elements.push({ type: "citation", text: citMatch[1] });
+        i++;
+        continue;
+      }
+      elements.push({ type: "paragraph", text: stripped });
+      i++;
+    }
+    return elements;
+  };
 
   // Auto-fill cover page from profile on mount
   useEffect(() => {
@@ -201,6 +312,49 @@ export function FormatterTab() {
   };
 
   const handleHeaderFocus = () => fireOnce("header_focus", "header_focus");
+
+  const handleIeeeFormat = async () => {
+    setIsFormatting(true);
+    try {
+      const formData = new FormData();
+      if (file) formData.append("file", file);
+      formData.append("settings", JSON.stringify({ filename }));
+      const response = await fetch("/api/format-ieee", { method: "POST", body: formData });
+      if (!response.ok) throw new Error("IEEE formatting failed");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename.endsWith(".docx") ? filename.replace(".docx", "_ieee.docx") : filename + "_ieee.docx";
+      document.body.appendChild(a); a.click();
+      URL.revokeObjectURL(url); document.body.removeChild(a);
+      toast.success("IEEE two-column document downloaded");
+    } catch {
+      toast.error("Failed to format IEEE document");
+    } finally {
+      setIsFormatting(false);
+    }
+  };
+
+  const handleAiAnalyze = async () => {
+    if (!file) return;
+    setIsAnalyzing(true);
+    setAiAnalysis(null);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("settings", JSON.stringify(settings));
+      const response = await fetch("/api/ai-analyze", { method: "POST", body: formData });
+      if (!response.ok) throw new Error("Analysis failed");
+      const data = await response.json();
+      setAiAnalysis(data);
+      toast.success("Document analysis complete!");
+    } catch {
+      toast.error("Failed to analyze document. Check your API key.");
+    } finally {
+      setIsAnalyzing(false);
+    }
+  };
 
   const handleFormat = async () => {
     // ── Gujarat Govt. SOP path ────────────────────────────────────────────────
@@ -319,6 +473,7 @@ export function FormatterTab() {
       pageXofY: settings.pageXofY,
       differentFirstPage: settings.diffFirstPage,
       differentOddEven: settings.diffOddEven,
+      stripExistingHF: settings.stripExistingHF,
     }, null, 2);
     const blob = new Blob([json], { type: "application/json" });
     const url = URL.createObjectURL(blob);
@@ -365,6 +520,7 @@ export function FormatterTab() {
           pageXofY: parsed.pageXofY ?? prev.pageXofY,
           diffFirstPage: parsed.differentFirstPage ?? prev.diffFirstPage,
           diffOddEven: parsed.differentOddEven ?? prev.diffOddEven,
+          stripExistingHF: parsed.stripExistingHF ?? prev.stripExistingHF,
         }));
         toast.success("Settings imported");
       } catch {
@@ -406,13 +562,19 @@ export function FormatterTab() {
                 <Label className="text-sm font-semibold">Source Document (Optional)</Label>
                 <div className="flex gap-2">
                   <input type="file" accept=".docx" className="hidden" ref={fileInputRef}
-                    onChange={(e) => e.target.files?.[0] && setFile(e.target.files[0])} />
+                    onChange={handleMainFileChange} />
                   <Button variant="outline" className="w-full justify-start text-muted-foreground font-normal"
                     onClick={() => fileInputRef.current?.click()}>
                     <Upload className="w-4 h-4 mr-2" />
                     {file ? file.name : "Select .docx file..."}
                   </Button>
-                  {file && <Button variant="ghost" size="icon" onClick={() => setFile(null)}>&times;</Button>}
+                  {file && (
+                    <Button variant="ghost" size="icon" onClick={() => {
+                      setFile(null);
+                      setParsedDocContent(null);
+                      if (fileInputRef.current) fileInputRef.current.value = "";
+                    }}>&times;</Button>
+                  )}
                 </div>
               </div>
             </AccordionItem>
@@ -467,12 +629,21 @@ export function FormatterTab() {
                     <div className="space-y-1">
                       <Label className="text-xs">Reference .docx (optional)</Label>
                       <input type="file" accept=".docx" className="hidden" ref={sopRefInputRef}
-                        onChange={(e) => setSopRefFile(e.target.files?.[0] || null)} />
-                      <Button variant="outline" size="sm" className="w-full h-8 text-xs justify-start gap-2"
-                        onClick={() => sopRefInputRef.current?.click()}>
-                        <Upload className="w-3.5 h-3.5" />
-                        {sopRefFile ? sopRefFile.name : "Upload to verify colors..."}
-                      </Button>
+                        onChange={handleSopFileChange} />
+                      <div className="flex gap-2">
+                        <Button variant="outline" size="sm" className="flex-1 h-8 text-xs justify-start gap-2"
+                          onClick={() => sopRefInputRef.current?.click()}>
+                          <Upload className="w-3.5 h-3.5" />
+                          {sopRefFile ? sopRefFile.name : "Upload to verify colors..."}
+                        </Button>
+                        {sopRefFile && (
+                          <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => {
+                            setSopRefFile(null);
+                            if (!file) setParsedDocContent(null);
+                            if (sopRefInputRef.current) sopRefInputRef.current.value = "";
+                          }}>&times;</Button>
+                        )}
+                      </div>
                       {sopRefFile && (
                         <p className="text-xs text-green-700">✓ Colors will be verified from reference</p>
                       )}
@@ -646,6 +817,16 @@ export function FormatterTab() {
                     <Switch checked={settings.diffOddEven}
                       onCheckedChange={(c) => updateSetting("diffOddEven", c)} />
                   </div>
+                  <div className="flex items-center justify-between pt-1 border-t border-border/40">
+                    <Label className="flex-1 cursor-pointer text-sm">
+                      Strip Existing Headers/Footers
+                      <span className="block text-xs text-muted-foreground font-normal mt-0.5">
+                        Remove any pre-existing headers and footers from the document
+                      </span>
+                    </Label>
+                    <Switch checked={settings.stripExistingHF}
+                      onCheckedChange={(c) => updateSetting("stripExistingHF", c)} />
+                  </div>
                 </div>
               </AccordionContent>
             </AccordionItem>
@@ -700,6 +881,11 @@ export function FormatterTab() {
           <Button className="w-full font-semibold gap-2" size="lg" onClick={handleFormat} disabled={isFormatting}>
             {isFormatting ? "Formatting..." : <><Download className="w-4 h-4" />Format & Download .docx</>}
           </Button>
+          {activePreset === "IEEE" && (
+            <Button variant="outline" className="w-full font-semibold gap-2" size="lg" onClick={handleIeeeFormat} disabled={isFormatting}>
+              {isFormatting ? "Formatting..." : <><Download className="w-4 h-4" />Download IEEE 2-Column .docx</>}
+            </Button>
+          )}
           <div className="flex gap-2">
             <input type="file" accept=".json" className="hidden" ref={importRef} onChange={handleImportSettings} />
             <Button variant="outline" size="sm" className="flex-1 gap-1.5 text-xs h-8"
@@ -711,6 +897,30 @@ export function FormatterTab() {
               <FileDown className="w-3.5 h-3.5" /> Export Settings
             </Button>
           </div>
+          {file && (
+            <Button variant="secondary" className="w-full gap-2 text-sm" size="sm"
+              onClick={handleAiAnalyze} disabled={isAnalyzing}>
+              {isAnalyzing ? (
+                <><div className="w-3.5 h-3.5 border-2 border-current border-t-transparent rounded-full animate-spin" /> Analyzing...</>
+              ) : (
+                <>🔍 Analyze Document with AI</>
+              )}
+            </Button>
+          )}
+          {aiAnalysis && (
+            <div className="rounded-lg border border-border bg-muted/30 p-3 space-y-2 max-h-60 overflow-y-auto custom-scrollbar">
+              <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">📊 AI Analysis ({aiAnalysis.stats?.word_count || 0} words)</p>
+              {(aiAnalysis.tips || []).map((tip: any, i: number) => (
+                <div key={i} className={`text-xs p-2 rounded border ${
+                  tip.severity === 'error' ? 'border-red-200 bg-red-50 text-red-800' :
+                  tip.severity === 'warning' ? 'border-amber-200 bg-amber-50 text-amber-800' :
+                  'border-blue-200 bg-blue-50 text-blue-800'
+                }`}>
+                  <span className="font-semibold">{tip.severity === 'error' ? '❌' : tip.severity === 'warning' ? '⚠️' : 'ℹ️'} {tip.title}:</span> {tip.tip}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       </ResizablePanel>
 
@@ -725,9 +935,75 @@ export function FormatterTab() {
           </div>
         </div>
 
-        <div className="flex-1 overflow-auto p-8 flex flex-col items-center gap-3 custom-scrollbar">
+        <div className="flex-1 overflow-auto p-8 flex flex-col items-center gap-8 custom-scrollbar">
+          
+          {/* ── Page 1: Cover Page ── */}
+          {!isParsingDoc && (isSOP || (!isSOP && coverPage.enabled)) && (
+            <>
+              <div
+                className="bg-white shadow-xl transition-all duration-200 relative border border-gray-200 shrink-0 flex flex-col"
+                style={{
+                  width: "21cm",
+                  minHeight: "29.7cm",
+                  paddingTop: `${settings.marginTop}cm`,
+                  paddingBottom: `${settings.marginBottom}cm`,
+                  paddingLeft: `${settings.marginLeft}cm`,
+                  paddingRight: `${settings.marginRight}cm`,
+                  fontFamily: settings.fontFamily,
+                  color: settings.bodyColor,
+                  lineHeight: settings.lineSpacing,
+                }}
+              >
+                {isSOP && (
+                  <div className="flex flex-col items-center justify-center text-center font-serif flex-1">
+                    <div className="flex-1" />
+                    <h1 className="font-bold text-2xl text-[#1A365D] mb-2">
+                      Chapter {sopChapterNumber}
+                    </h1>
+                    <h2 className="font-bold text-lg text-[#002060] mb-2 max-w-lg">
+                      {sopChapterTitle || "Chapter Title"}
+                    </h2>
+                    <p className="italic text-sm text-[#002060] mb-6">
+                      Standard Operating Procedure
+                    </p>
+                    <p className="text-xs text-[#1A365D]">
+                      Gujarat State Police Wireless Grid
+                    </p>
+                    <div className="flex-1" />
+                  </div>
+                )}
+
+                {!isSOP && coverPage.enabled && (
+                  <div className="flex flex-col items-center text-center justify-between py-10 font-serif flex-1">
+                    <div>
+                      {coverPage.universityName && <h1 className="font-bold text-lg text-black uppercase">{coverPage.universityName}</h1>}
+                      {coverPage.department && <p className="text-sm text-gray-600 mt-1">{coverPage.department}</p>}
+                    </div>
+                    
+                    <div className="my-10">
+                      <h2 className="font-bold text-3xl text-[#1F3864] max-w-lg mx-auto">{coverPage.title || "Project Title"}</h2>
+                      {coverPage.subject && <p className="text-md text-gray-700 mt-4">{coverPage.subject}</p>}
+                    </div>
+                    
+                    <div className="space-y-2">
+                      {coverPage.studentName && <p className="text-sm font-medium text-black">Submitted by: {coverPage.studentName}</p>}
+                      {coverPage.rollNumber && <p className="text-xs text-gray-500">Roll No: {coverPage.rollNumber}</p>}
+                      {coverPage.date && <p className="text-xs text-gray-400 mt-4">{coverPage.date}</p>}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Page break divider gap */}
+              <div className="w-full flex items-center justify-center max-w-[21cm]">
+                <span className="text-xs text-gray-400 bg-transparent px-3 py-0.5 rounded-full border border-gray-300 shadow-sm select-none">Page Break</span>
+              </div>
+            </>
+          )}
+
+          {/* ── Page 2+: Document Body ── */}
           <div
-            className="bg-white shadow-xl transition-all duration-200 relative border border-gray-200"
+            className="bg-white shadow-xl transition-all duration-200 relative border border-gray-200 shrink-0"
             style={{
               width: "21cm",
               minHeight: "29.7cm",
@@ -753,26 +1029,218 @@ export function FormatterTab() {
               </div>
             )}
 
-            <div style={{ fontSize: `${settings.bodySize}pt` }}>
-              <h1 className="font-bold" style={{ fontSize: `${settings.h1Size}pt`, color: settings.h1Color, marginBottom: `${settings.spacingAfter}pt` }}>
-                Chapter 1: Introduction to Formatting
-              </h1>
-              <p style={{ marginBottom: `${settings.spacingAfter}pt` }}>
-                This is how your body text will appear. Spacing, font size, and family update live. Indian universities typically require Times New Roman 12pt with 1.5 line spacing.
-              </p>
-              <h2 className="font-bold" style={{ fontSize: `${settings.h2Size}pt`, color: settings.h2Color, marginBottom: `${settings.spacingAfter}pt` }}>
-                1.1 Section Heading
-              </h2>
-              <p style={{ marginBottom: `${settings.spacingAfter}pt` }}>
-                Another paragraph of body text with the same styling throughout. Heading colors appear above.
-              </p>
-              <h3 className="font-bold" style={{ fontSize: `${settings.h3Size}pt`, color: settings.h3Color, marginBottom: `${settings.spacingAfter}pt` }}>
-                1.1.1 Subsection
-              </h3>
-              <p style={{ marginBottom: `${settings.spacingAfter}pt` }}>
-                Content under a subsection heading. Formatting rules apply consistently throughout.
-              </p>
-            </div>
+            {isParsingDoc ? (
+              <div className="flex flex-col items-center justify-center min-h-[300px] text-muted-foreground gap-2 pt-20">
+                <div className="w-6 h-6 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                <p className="text-sm">Reading document content...</p>
+              </div>
+            ) : (
+              <>
+                {/* ── Document Body ── */}
+                <div style={{ fontSize: `${settings.bodySize}pt` }}>
+                  {(() => {
+                    const DEFAULT_PREVIEW_ELEMENTS = [
+                      { type: "h1", text: "Chapter 1: Introduction to Formatting", level: 1 },
+                      { type: "paragraph", text: "This is how your body text will appear. Spacing, font size, and family update live. Indian universities typically require Times New Roman 12pt with 1.5 line spacing." },
+                      { type: "h2", text: "1.1 Section Heading", level: 2 },
+                      { type: "paragraph", text: "Another paragraph of body text with the same styling throughout. Heading colors appear above." },
+                      { type: "h3", text: "1.1.1 Subsection", level: 3 },
+                      { type: "paragraph", text: "Content under a subsection heading. Formatting rules apply consistently throughout." },
+                    ];
+
+                    let previewElements = parsedDocContent;
+                    if (isSOP) {
+                      if (sopContent.trim()) {
+                        previewElements = parseSopTextForPreview(sopContent);
+                      }
+                    }
+
+                    const activeElements = previewElements || DEFAULT_PREVIEW_ELEMENTS;
+
+                    return activeElements.map((el, index) => {
+                      if (el.type === "h1") {
+                        return (
+                          <h1
+                            key={index}
+                            className="font-bold"
+                            style={{
+                              fontFamily: isSOP ? "Times New Roman" : settings.fontFamily,
+                              fontSize: `${isSOP ? 14 : settings.h1Size}pt`,
+                              color: isSOP ? "#000080" : settings.h1Color,
+                              marginBottom: `${settings.spacingAfter}pt`,
+                              marginTop: "12pt",
+                            }}
+                          >
+                            {el.text}
+                          </h1>
+                        );
+                      }
+                      if (el.type === "h2") {
+                        return (
+                          <h2
+                            key={index}
+                            className="font-bold"
+                            style={{
+                              fontFamily: isSOP ? "Times New Roman" : settings.fontFamily,
+                              fontSize: `${isSOP ? 14 : settings.h2Size}pt`,
+                              color: isSOP ? "#C00000" : settings.h2Color,
+                              marginBottom: `${settings.spacingAfter}pt`,
+                              marginTop: "12pt",
+                            }}
+                          >
+                            {el.text}
+                          </h2>
+                        );
+                      }
+                      if (el.type === "h3") {
+                        return (
+                          <h3
+                            key={index}
+                            className="font-bold"
+                            style={{
+                              fontFamily: isSOP ? "Times New Roman" : settings.fontFamily,
+                              fontSize: `${isSOP ? 12 : settings.h3Size}pt`,
+                              color: isSOP ? "#1F4D78" : settings.h3Color,
+                              marginBottom: `${settings.spacingAfter}pt`,
+                              marginTop: "12pt",
+                            }}
+                          >
+                            {el.text}
+                          </h3>
+                        );
+                      }
+                      if (el.type === "h4") {
+                        return (
+                          <h4
+                            key={index}
+                            className="font-bold"
+                            style={{
+                              fontFamily: isSOP ? "Times New Roman" : settings.fontFamily,
+                              fontSize: `${isSOP ? 12 : settings.h4Size}pt`,
+                              color: isSOP ? "#1F4D78" : settings.h4Color,
+                              marginBottom: `${settings.spacingAfter}pt`,
+                              marginTop: "12pt",
+                            }}
+                          >
+                            {el.text}
+                          </h4>
+                        );
+                      }
+                      if (el.type === "bullet") {
+                        return (
+                          <div
+                            key={index}
+                            className="flex items-start gap-1"
+                            style={{
+                              fontFamily: isSOP ? "Times New Roman" : settings.fontFamily,
+                              fontSize: `${isSOP ? 12 : settings.bodySize}pt`,
+                              color: isSOP ? "#000000" : settings.bodyColor,
+                              marginBottom: `${settings.spacingAfter}pt`,
+                              paddingLeft: "20px",
+                            }}
+                          >
+                            <span className="shrink-0">{isSOP ? "→" : "•"}</span>
+                            <span>{el.text}</span>
+                          </div>
+                        );
+                      }
+                      if (el.type === "objective") {
+                        return (
+                          <p
+                            key={index}
+                            style={{
+                              fontFamily: "Times New Roman",
+                              fontSize: "12pt",
+                              color: "#000000",
+                              marginBottom: `${settings.spacingAfter}pt`,
+                              textAlign: "justify",
+                            }}
+                          >
+                            <span className="font-bold italic text-[#000080]" style={{ marginRight: "6px" }}>
+                              {el.label || "Objective:"}
+                            </span>
+                            {el.text}
+                          </p>
+                        );
+                      }
+                      if (el.type === "reference") {
+                        return (
+                          <p
+                            key={index}
+                            style={{
+                              fontFamily: "Times New Roman",
+                              fontSize: "12pt",
+                              color: "#000000",
+                              marginBottom: `${settings.spacingAfter}pt`,
+                              textAlign: "justify",
+                            }}
+                          >
+                            <span className="font-bold text-[#000080]" style={{ marginRight: "6px" }}>
+                              Reference:
+                            </span>
+                            {el.text}
+                          </p>
+                        );
+                      }
+                      if (el.type === "citation") {
+                        return (
+                          <p
+                            key={index}
+                            style={{
+                              fontFamily: "Times New Roman",
+                              fontSize: "10pt",
+                              color: "#404040",
+                              fontStyle: "italic",
+                              marginBottom: `${settings.spacingAfter}pt`,
+                            }}
+                          >
+                            {el.text}
+                          </p>
+                        );
+                      }
+                      if (el.type === "table") {
+                        return (
+                          <div key={index} className="overflow-x-auto my-4 border border-gray-200 rounded">
+                            <table className="w-full text-left border-collapse text-xs">
+                              <thead>
+                                <tr style={{ backgroundColor: isSOP ? "#2C5282" : "#D9D9D9", color: isSOP ? "#FFFFFF" : "#000000" }}>
+                                  {(el.headers || []).map((h: any, hi: number) => (
+                                    <th key={hi} className="p-2 border border-gray-300">{h}</th>
+                                  ))}
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(el.rows || []).map((row: any[], ri: number) => (
+                                  <tr key={ri} style={{ backgroundColor: ri % 2 === 0 ? "#F7F7F7" : "#FFFFFF" }}>
+                                    {row.map((val: any, ci: number) => (
+                                      <td key={ci} className="p-2 border border-gray-200 text-black">{val}</td>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </tbody>
+                            </table>
+                          </div>
+                        );
+                      }
+                      return (
+                        <p
+                          key={index}
+                          style={{
+                            fontFamily: isSOP ? "Times New Roman" : settings.fontFamily,
+                            fontSize: `${isSOP ? 12 : settings.bodySize}pt`,
+                            color: isSOP ? "#000000" : settings.bodyColor,
+                            marginBottom: `${settings.spacingAfter}pt`,
+                            textAlign: "justify",
+                          }}
+                        >
+                          {el.text}
+                        </p>
+                      );
+                    });
+                  })()}
+                </div>
+              </>
+            )}
 
             <div className="absolute bottom-6 left-0 right-0 text-center text-gray-300 text-xs select-none pointer-events-none">
               Preview is approximate — actual .docx may vary slightly

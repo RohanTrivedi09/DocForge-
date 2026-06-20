@@ -75,6 +75,25 @@ def _set_header_footer_text(hf, text: str, font_size: int = 10):
     run.font.size = Pt(font_size)
 
 
+def _strip_header_footer(hf):
+    """Remove all text, borders, tab stops, and extra paragraphs from a header or footer."""
+    if hf.paragraphs:
+        para = hf.paragraphs[0]
+        pPr = para._p.get_or_add_pPr()
+        # Remove existing properties (like borders, tab stops, shading)
+        for child in list(pPr):
+            pPr.remove(child)
+        para.clear()
+        
+        # Remove any extra paragraphs beyond the first one
+        p_elements = [p._p for p in hf.paragraphs[1:]]
+        for p_el in p_elements:
+            parent = p_el.getparent()
+            if parent is not None:
+                parent.remove(p_el)
+
+
+
 def _add_page_number(footer, position: str = "center", page_x_of_y: bool = False):
     """Add automatic page number field (or 'Page X of Y') to a footer paragraph."""
     para = footer.paragraphs[0]
@@ -173,6 +192,14 @@ def apply_formatting(file_bytes: Optional[bytes], cfg: Dict[str, Any]) -> bytes:
 
         section.different_first_page_header_footer = diff_first
         section.different_odd_even_pages = diff_odd_even
+
+        if cfg.get("stripExistingHF", False):
+            _strip_header_footer(section.header)
+            _strip_header_footer(section.even_page_header)
+            _strip_header_footer(section.first_page_header)
+            _strip_header_footer(section.footer)
+            _strip_header_footer(section.even_page_footer)
+            _strip_header_footer(section.first_page_footer)
 
         header_text = cfg.get("headerText") or header_cfg.get("text", "")
         footer_text = cfg.get("footerText") or footer_cfg.get("text", "")

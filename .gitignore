@@ -53,3 +53,6 @@ Thumbs.db
 venv/
 __pycache__/
 *.pyc
+
+# Environment secrets
+.env
