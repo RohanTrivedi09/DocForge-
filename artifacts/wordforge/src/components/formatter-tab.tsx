@@ -1094,10 +1094,6 @@ export function FormatterTab() {
       <ResizablePanel defaultSize={65} className="bg-muted/30 flex flex-col relative overflow-hidden">
         <div className="absolute top-4 left-4 z-10 flex gap-2 items-center">
           <div className="bg-background/80 backdrop-blur-sm px-3 py-1.5 rounded-full text-xs font-medium border border-border shadow-sm flex items-center gap-2">
-            <Eye className="w-3 h-3 text-muted-foreground" />
-            Live Preview
-          </div>
-          <div className="bg-background/80 backdrop-blur-sm px-3 py-1.5 rounded-full text-xs font-medium border border-border shadow-sm flex items-center gap-2">
             <span className={showDiff ? "text-muted-foreground" : "text-primary font-bold"}>Formatted</span>
             <Switch checked={showDiff} onCheckedChange={setShowDiff} className="data-[state=checked]:bg-gray-400" />
             <span className={showDiff ? "text-primary font-bold" : "text-muted-foreground"}>Raw Original</span>
@@ -1107,7 +1103,9 @@ export function FormatterTab() {
         <div className="flex-1 overflow-auto p-8 flex flex-col items-center gap-8 custom-scrollbar">
           
           {/* ── Page 1: Cover Page ── */}
-          {!isParsingDoc && (isSOP || (!isSOP && coverPage.enabled)) && (
+          {!isParsingDoc && (isSOP || (!isSOP && coverPage.enabled)) && (() => {
+            const previewSettings = showDiff ? DEFAULT_SETTINGS : settings;
+            return (
             <>
               <div
                 className="bg-white shadow-xl transition-all duration-200 relative border border-gray-200 shrink-0 flex flex-col"
@@ -1168,9 +1166,12 @@ export function FormatterTab() {
                 <span className="text-xs text-gray-400 bg-transparent px-3 py-0.5 rounded-full border border-gray-300 shadow-sm select-none">Page Break</span>
               </div>
             </>
-          )}
+          )})()}
 
           {/* ── Page 2+: Document Body ── */}
+          {(() => {
+            const previewSettings = showDiff ? DEFAULT_SETTINGS : settings;
+            return (
           <div
             className="bg-white shadow-xl transition-all duration-200 relative border border-gray-200 shrink-0"
             style={{
@@ -1206,7 +1207,7 @@ export function FormatterTab() {
             ) : (
               <>
                 {/* ── Document Body ── */}
-                <div style={{ fontSize: `${previewSettings.bodySize}pt` }}>
+                <div style={{ fontSize: `${showDiff ? 12 : previewSettings.bodySize}pt` }}>
                   {(() => {
                     const DEFAULT_PREVIEW_ELEMENTS = [
                       { type: "h1", text: "Chapter 1: Introduction to Formatting", level: 1 },
@@ -1460,6 +1461,7 @@ export function FormatterTab() {
               Preview is approximate — actual .docx may vary slightly
             </div>
           </div>
+          )})()}
         </div>
       </ResizablePanel>
     </ResizablePanelGroup>
