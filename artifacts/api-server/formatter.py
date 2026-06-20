@@ -253,6 +253,14 @@ def apply_formatting(file_bytes: Optional[bytes], cfg: Dict[str, Any]) -> bytes:
         pf.space_before = Pt(para_before)
         pf.space_after = Pt(para_after)
 
+    if cfg.get("removeEmptyParagraphs", False):
+        for para in list(doc.paragraphs):
+            # Check if paragraph is purely whitespace and doesn't contain a drawing/image
+            if not para.text.strip() and not para._element.xpath('.//w:drawing'):
+                p_el = para._element
+                if p_el.getparent() is not None:
+                    p_el.getparent().remove(p_el)
+
     out = io.BytesIO()
     doc.save(out)
     return out.getvalue()
