@@ -589,6 +589,85 @@ def _add_image_output(doc: Document, b64_data: str, caption: Optional[str] = Non
         doc.add_paragraph("[Image could not be embedded]")
 
 
+# ── Model Summary Table ───────────────────────────────────────────────────────
+
+def _is_model_summary(text: str) -> bool:
+    if "Layer (type)" in text and "Output Shape" in text and "Param #" in text:
+        if bool(re.search(r"[│├└─═┃┏┳┓┡╇┩]", text)):
+            return True
+    return False
+
+def _add_model_summary_table(doc: Document, text: str):
+    lines = text.split("\n")
+    rows = []
+    for line in lines:
+        if re.match(r"^[\s─═━┼╪╇┿┿┩┡├┝┢┣┳┻╋┫┨┯┷┏┓┗┛└┴┬]+$", line):
+            continue
+        cols = re.split(r"[│┃|]", line)
+        cols = [c.strip() for c in cols]
+        if cols and not cols[0]:
+            cols.pop(0)
+        if cols and not cols[-1]:
+            cols.pop(-1)
+        if len(cols) >= 3:
+            rows.append(cols[:3])
+            
+    if not rows:
+        _add_text_output(doc, text)
+        return
+
+    table = doc.add_table(rows=len(rows), cols=3)
+    table.style = "Table Grid"
+
+    tblPr = table._tbl.tblPr
+    tblW = OxmlElement('w:tblW')
+    tblW.set(qn('w:w'), '5000')
+    tblW.set(qn('w:type'), 'pct')
+    tblPr.append(tblW)
+    
+    tblBorders = OxmlElement("w:tblBorders")
+    for side in ("top", "left", "bottom", "right", "insideH", "insideV"):
+        border = OxmlElement(f"w:{side}")
+        border.set(qn("w:val"), "single")
+        border.set(qn("w:sz"), "1")
+        border.set(qn("w:space"), "0")
+        border.set(qn("w:color"), "CCCCCC")
+        tblBorders.append(border)
+    tblPr.append(tblBorders)
+
+    tblCellMar = OxmlElement("w:tblCellMar")
+    for pos, w in (("top", 0), ("bottom", 0), ("left", 10), ("right", 10)):
+        node = OxmlElement(f"w:{pos}")
+        node.set(qn("w:w"), str(w))
+        node.set(qn("w:type"), "dxa")
+        tblCellMar.append(node)
+    tblPr.append(tblCellMar)
+
+    for ri, row_data in enumerate(rows):
+        row = table.rows[ri]
+        for ci, cell_text in enumerate(row_data):
+            if ci >= 3: break
+            cell = row.cells[ci]
+            cell.text = _sanitize(cell_text)
+            
+            tcPr = cell._tc.get_or_add_tcPr()
+            shd = OxmlElement("w:shd")
+            shd.set(qn("w:val"), "clear")
+            shd.set(qn("w:color"), "auto")
+            shd.set(qn("w:fill"), "FAFAFA")
+            tcPr.append(shd)
+            
+            for para in cell.paragraphs:
+                for run in para.runs:
+                    run.font.name = "Consolas"
+                    run.font.size = Pt(14)
+                    run.font.color.rgb = RGBColor(0, 0, 0)
+                    if ri == 0:
+                        run.bold = True
+                        
+    doc.add_paragraph()
+
+
 # ── DataFrame table ───────────────────────────────────────────────────────────
 
 def _add_dataframe_table(doc: Document, text: str):
@@ -721,7 +800,10 @@ def convert_notebook(file_bytes: bytes, cfg: Dict[str, Any]) -> bytes:
                             _add_text_output(doc, text, shaded=True)
                     else:
                         if text.strip():
-                            _add_text_output(doc, text, shaded=False)
+                            if _is_model_summary(text):
+                                _add_model_summary_table(doc, text)
+                            else:
+                                _add_text_output(doc, text, shaded=False)
 
                 elif otype in ("display_data", "execute_result"):
                     data = output.get("data", {})
@@ -741,6 +823,8 @@ def convert_notebook(file_bytes: bytes, cfg: Dict[str, Any]) -> bytes:
                         if text.strip():
                             if show_dataframes and re.search(r"\s{2,}", text) and text.count("\n") > 1:
                                 _add_dataframe_table(doc, text)
+                            elif _is_model_summary(text):
+                                _add_model_summary_table(doc, text)
                             else:
                                 _add_text_output(doc, text, shaded=False)
 
