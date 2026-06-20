@@ -108,6 +108,16 @@ export function FormatterTab() {
 
   const [settings, setSettings] = useState(loadLastSettings);
 
+  const [customPresets, setCustomPresets] = useState<Record<string, any>>(() => {
+    try {
+      const stored = localStorage.getItem("docforge_custom_presets");
+      if (stored) return JSON.parse(stored);
+    } catch {}
+    return {};
+  });
+  const [newPresetName, setNewPresetName] = useState("");
+  const [showDiff, setShowDiff] = useState(false);
+
   const [filename, setFilename] = useState("submission.docx");
 
   const [coverPage, setCoverPage] = useState({
@@ -356,6 +366,33 @@ export function FormatterTab() {
     }
   };
 
+  const handleAutoFix = async () => {
+    if (!file) return;
+    const autoFixSettings = { ...settings, removeEmptyParagraphs: true, fontFamily: settings.fontFamily || "Times New Roman" };
+    setSettings(autoFixSettings);
+    setIsFormatting(true);
+    try {
+      const payload = { ...autoFixSettings, filename, coverPage };
+      const formData = new FormData();
+      formData.append("file", file);
+      formData.append("settings", JSON.stringify(payload));
+      const response = await fetch("/api/format-doc", { method: "POST", body: formData });
+      if (!response.ok) throw new Error("Auto-Fix failed");
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = filename.endsWith(".docx") ? filename.replace(".docx", "_autofixed.docx") : filename + "_autofixed.docx";
+      document.body.appendChild(a); a.click();
+      URL.revokeObjectURL(url); document.body.removeChild(a);
+      toast.success("✨ Document Auto-Fixed and downloaded!");
+    } catch {
+      toast.error("Failed to Auto-Fix document");
+    } finally {
+      setIsFormatting(false);
+    }
+  };
+
   const handleFormat = async () => {
     // ── Gujarat Govt. SOP path ────────────────────────────────────────────────
     if (isSOP) {
@@ -439,11 +476,28 @@ export function FormatterTab() {
     }
   };
 
-  const applyPreset = (name: keyof typeof PRESETS) => {
-    const p = PRESETS[name];
-    setSettings((prev: typeof DEFAULT_SETTINGS) => ({ ...prev, ...p }));
-    setActivePreset(name);
-    toast.success(`Preset applied: ${name}`);
+  const applyPreset = (name: string) => {
+    const p = PRESETS[name as keyof typeof PRESETS] || customPresets[name];
+    if (p) {
+      setSettings((prev: typeof DEFAULT_SETTINGS) => ({ ...prev, ...p }));
+      setActivePreset(name);
+      toast.success(`Preset applied: ${name}`);
+    }
+  };
+
+  const handleSavePreset = () => {
+    if (!newPresetName.trim()) {
+      toast.error("Please enter a preset name");
+      return;
+    }
+    const presetData = { ...settings };
+    setCustomPresets(prev => {
+      const next = { ...prev, [newPresetName.trim()]: presetData };
+      localStorage.setItem("docforge_custom_presets", JSON.stringify(next));
+      return next;
+    });
+    setNewPresetName("");
+    toast.success("Preset saved successfully!");
   };
 
   const handleExportSettings = () => {
@@ -584,15 +638,44 @@ export function FormatterTab() {
               <AccordionTrigger className="hover:no-underline font-medium text-sm">Preset Templates</AccordionTrigger>
               <AccordionContent className="pt-2 space-y-3">
                 <div className="grid grid-cols-2 gap-2">
-                  {(Object.keys(PRESETS) as (keyof typeof PRESETS)[]).map((name) => (
+                  {(Object.keys(PRESETS)).map((name) => (
                     <Button key={name} variant={activePreset === name ? "secondary" : "outline"}
                       size="sm" className="h-8 text-xs"
                       onClick={() => applyPreset(name)}>
                       {name === "Gujarat Govt. SOP" ? "🏛️ " : ""}{name}
                     </Button>
                   ))}
+                  {Object.keys(customPresets).map((name) => (
+                    <div key={name} className="flex gap-1">
+                      <Button variant={activePreset === name ? "secondary" : "outline"}
+                        size="sm" className="h-8 text-xs flex-1 truncate"
+                        onClick={() => applyPreset(name)}>
+                        {name}
+                      </Button>
+                      <Button variant="ghost" size="icon" className="h-8 w-8 text-red-500 shrink-0" onClick={(e) => {
+                        e.stopPropagation();
+                        const next = { ...customPresets };
+                        delete next[name];
+                        setCustomPresets(next);
+                        localStorage.setItem("docforge_custom_presets", JSON.stringify(next));
+                      }}>
+                        &times;
+                      </Button>
+                    </div>
+                  ))}
                 </div>
-                <p className="text-xs text-muted-foreground">
+                <div className="flex gap-2 mt-3 pt-3 border-t border-border">
+                  <Input 
+                    placeholder="Save current settings as..." 
+                    className="h-8 text-xs flex-1" 
+                    value={newPresetName}
+                    onChange={e => setNewPresetName(e.target.value)}
+                  />
+                  <Button variant="outline" size="sm" className="h-8 text-xs" onClick={handleSavePreset}>
+                    Save Preset
+                  </Button>
+                </div>
+                <p className="text-xs text-muted-foreground mt-2">
                   One click loads all settings for that standard.
                 </p>
 
@@ -919,6 +1002,9 @@ export function FormatterTab() {
                   <span className="font-semibold">{tip.severity === 'error' ? '❌' : tip.severity === 'warning' ? '⚠️' : 'ℹ️'} {tip.title}:</span> {tip.tip}
                 </div>
               ))}
+              <Button onClick={handleAutoFix} className="w-full mt-2 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 text-white shadow-md font-semibold gap-2 border-0">
+                ✨ Auto-Fix Document
+              </Button>
             </div>
           )}
         </div>
