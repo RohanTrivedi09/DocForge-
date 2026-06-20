@@ -585,6 +585,7 @@ export function FormatterTab() {
     e.target.value = "";
   };
 
+  const previewSettings = showDiff ? DEFAULT_SETTINGS : settings;
   return (
     <ResizablePanelGroup direction="horizontal" className="h-full flex-1 rounded-none border-none">
       {/* ── Controls Panel ── */}
@@ -1014,10 +1015,15 @@ export function FormatterTab() {
 
       {/* ── Preview Panel ── */}
       <ResizablePanel defaultSize={65} className="bg-muted/30 flex flex-col relative overflow-hidden">
-        <div className="absolute top-4 left-4 z-10">
+        <div className="absolute top-4 left-4 z-10 flex gap-2 items-center">
           <div className="bg-background/80 backdrop-blur-sm px-3 py-1.5 rounded-full text-xs font-medium border border-border shadow-sm flex items-center gap-2">
             <Eye className="w-3 h-3 text-muted-foreground" />
             Live Preview
+          </div>
+          <div className="bg-background/80 backdrop-blur-sm px-3 py-1.5 rounded-full text-xs font-medium border border-border shadow-sm flex items-center gap-2">
+            <span className={showDiff ? "text-muted-foreground" : "text-primary font-bold"}>Formatted</span>
+            <Switch checked={showDiff} onCheckedChange={setShowDiff} className="data-[state=checked]:bg-gray-400" />
+            <span className={showDiff ? "text-primary font-bold" : "text-muted-foreground"}>Raw Original</span>
           </div>
         </div>
 
@@ -1031,13 +1037,13 @@ export function FormatterTab() {
                 style={{
                   width: "21cm",
                   minHeight: "29.7cm",
-                  paddingTop: `${settings.marginTop}cm`,
-                  paddingBottom: `${settings.marginBottom}cm`,
-                  paddingLeft: `${settings.marginLeft}cm`,
-                  paddingRight: `${settings.marginRight}cm`,
-                  fontFamily: settings.fontFamily,
-                  color: settings.bodyColor,
-                  lineHeight: settings.lineSpacing,
+                  paddingTop: `${previewSettings.marginTop}cm`,
+                  paddingBottom: `${previewSettings.marginBottom}cm`,
+                  paddingLeft: `${previewSettings.marginLeft}cm`,
+                  paddingRight: `${previewSettings.marginRight}cm`,
+                  fontFamily: previewSettings.fontFamily,
+                  color: previewSettings.bodyColor,
+                  lineHeight: previewSettings.lineSpacing,
                 }}
               >
                 {isSOP && (
@@ -1093,25 +1099,25 @@ export function FormatterTab() {
             style={{
               width: "21cm",
               minHeight: "29.7cm",
-              paddingTop: `${settings.marginTop}cm`,
-              paddingBottom: `${settings.marginBottom}cm`,
-              paddingLeft: `${settings.marginLeft}cm`,
-              paddingRight: `${settings.marginRight}cm`,
-              fontFamily: settings.fontFamily,
-              color: settings.bodyColor,
-              lineHeight: settings.lineSpacing,
+              paddingTop: `${previewSettings.marginTop}cm`,
+              paddingBottom: `${previewSettings.marginBottom}cm`,
+              paddingLeft: `${previewSettings.marginLeft}cm`,
+              paddingRight: `${previewSettings.marginRight}cm`,
+              fontFamily: previewSettings.fontFamily,
+              color: previewSettings.bodyColor,
+              lineHeight: previewSettings.lineSpacing,
             }}
           >
-            {settings.headerText && (
+            {previewSettings.headerText && (
               <div className="absolute top-0 left-0 right-0 border-b border-gray-100 flex items-end px-10 pb-1.5 text-gray-400 text-xs"
-                style={{ height: `${settings.marginTop}cm` }}>
-                {settings.headerText}
+                style={{ height: `${previewSettings.marginTop}cm` }}>
+                {previewSettings.headerText}
               </div>
             )}
 
-            {settings.pageNumbers && (
-              <div className={`absolute bottom-4 left-0 right-0 px-10 text-gray-400 text-xs flex ${settings.pageNumberPos === "left" ? "justify-start" : settings.pageNumberPos === "right" ? "justify-end" : "justify-center"}`}>
-                {settings.pageXofY ? "Page 1 of 12" : "1"}
+            {previewSettings.pageNumbers && (
+              <div className={`absolute bottom-4 left-0 right-0 px-10 text-gray-400 text-xs flex ${previewSettings.pageNumberPos === "left" ? "justify-start" : previewSettings.pageNumberPos === "right" ? "justify-end" : "justify-center"}`}>
+                {previewSettings.pageXofY ? "Page 1 of 12" : "1"}
               </div>
             )}
 
@@ -1123,7 +1129,7 @@ export function FormatterTab() {
             ) : (
               <>
                 {/* ── Document Body ── */}
-                <div style={{ fontSize: `${settings.bodySize}pt` }}>
+                <div style={{ fontSize: `${previewSettings.bodySize}pt` }}>
                   {(() => {
                     const DEFAULT_PREVIEW_ELEMENTS = [
                       { type: "h1", text: "Chapter 1: Introduction to Formatting", level: 1 },
@@ -1150,10 +1156,10 @@ export function FormatterTab() {
                             key={index}
                             className="font-bold"
                             style={{
-                              fontFamily: isSOP ? "Times New Roman" : settings.fontFamily,
-                              fontSize: `${isSOP ? 14 : settings.h1Size}pt`,
-                              color: isSOP ? "#000080" : settings.h1Color,
-                              marginBottom: `${settings.spacingAfter}pt`,
+                              fontFamily: isSOP ? "Times New Roman" : previewSettings.fontFamily,
+                              fontSize: `${isSOP ? 14 : previewSettings.h1Size}pt`,
+                              color: isSOP ? "#000080" : previewSettings.h1Color,
+                              marginBottom: `${previewSettings.spacingAfter}pt`,
                               marginTop: "12pt",
                             }}
                           >
@@ -1167,10 +1173,10 @@ export function FormatterTab() {
                             key={index}
                             className="font-bold"
                             style={{
-                              fontFamily: isSOP ? "Times New Roman" : settings.fontFamily,
-                              fontSize: `${isSOP ? 14 : settings.h2Size}pt`,
-                              color: isSOP ? "#C00000" : settings.h2Color,
-                              marginBottom: `${settings.spacingAfter}pt`,
+                              fontFamily: isSOP ? "Times New Roman" : previewSettings.fontFamily,
+                              fontSize: `${isSOP ? 14 : previewSettings.h2Size}pt`,
+                              color: isSOP ? "#C00000" : previewSettings.h2Color,
+                              marginBottom: `${previewSettings.spacingAfter}pt`,
                               marginTop: "12pt",
                             }}
                           >
@@ -1184,10 +1190,10 @@ export function FormatterTab() {
                             key={index}
                             className="font-bold"
                             style={{
-                              fontFamily: isSOP ? "Times New Roman" : settings.fontFamily,
-                              fontSize: `${isSOP ? 12 : settings.h3Size}pt`,
-                              color: isSOP ? "#1F4D78" : settings.h3Color,
-                              marginBottom: `${settings.spacingAfter}pt`,
+                              fontFamily: isSOP ? "Times New Roman" : previewSettings.fontFamily,
+                              fontSize: `${isSOP ? 12 : previewSettings.h3Size}pt`,
+                              color: isSOP ? "#1F4D78" : previewSettings.h3Color,
+                              marginBottom: `${previewSettings.spacingAfter}pt`,
                               marginTop: "12pt",
                             }}
                           >
@@ -1201,10 +1207,10 @@ export function FormatterTab() {
                             key={index}
                             className="font-bold"
                             style={{
-                              fontFamily: isSOP ? "Times New Roman" : settings.fontFamily,
-                              fontSize: `${isSOP ? 12 : settings.h4Size}pt`,
-                              color: isSOP ? "#1F4D78" : settings.h4Color,
-                              marginBottom: `${settings.spacingAfter}pt`,
+                              fontFamily: isSOP ? "Times New Roman" : previewSettings.fontFamily,
+                              fontSize: `${isSOP ? 12 : previewSettings.h4Size}pt`,
+                              color: isSOP ? "#1F4D78" : previewSettings.h4Color,
+                              marginBottom: `${previewSettings.spacingAfter}pt`,
                               marginTop: "12pt",
                             }}
                           >
@@ -1218,10 +1224,10 @@ export function FormatterTab() {
                             key={index}
                             className="flex items-start gap-1"
                             style={{
-                              fontFamily: isSOP ? "Times New Roman" : settings.fontFamily,
-                              fontSize: `${isSOP ? 12 : settings.bodySize}pt`,
-                              color: isSOP ? "#000000" : settings.bodyColor,
-                              marginBottom: `${settings.spacingAfter}pt`,
+                              fontFamily: isSOP ? "Times New Roman" : previewSettings.fontFamily,
+                              fontSize: `${isSOP ? 12 : previewSettings.bodySize}pt`,
+                              color: isSOP ? "#000000" : previewSettings.bodyColor,
+                              marginBottom: `${previewSettings.spacingAfter}pt`,
                               paddingLeft: "20px",
                             }}
                           >
@@ -1238,7 +1244,7 @@ export function FormatterTab() {
                               fontFamily: "Times New Roman",
                               fontSize: "12pt",
                               color: "#000000",
-                              marginBottom: `${settings.spacingAfter}pt`,
+                              marginBottom: `${previewSettings.spacingAfter}pt`,
                               textAlign: "justify",
                             }}
                           >
@@ -1257,7 +1263,7 @@ export function FormatterTab() {
                               fontFamily: "Times New Roman",
                               fontSize: "12pt",
                               color: "#000000",
-                              marginBottom: `${settings.spacingAfter}pt`,
+                              marginBottom: `${previewSettings.spacingAfter}pt`,
                               textAlign: "justify",
                             }}
                           >
@@ -1277,7 +1283,7 @@ export function FormatterTab() {
                               fontSize: "10pt",
                               color: "#404040",
                               fontStyle: "italic",
-                              marginBottom: `${settings.spacingAfter}pt`,
+                              marginBottom: `${previewSettings.spacingAfter}pt`,
                             }}
                           >
                             {el.text}
@@ -1312,10 +1318,10 @@ export function FormatterTab() {
                         <p
                           key={index}
                           style={{
-                            fontFamily: isSOP ? "Times New Roman" : settings.fontFamily,
-                            fontSize: `${isSOP ? 12 : settings.bodySize}pt`,
-                            color: isSOP ? "#000000" : settings.bodyColor,
-                            marginBottom: `${settings.spacingAfter}pt`,
+                            fontFamily: isSOP ? "Times New Roman" : previewSettings.fontFamily,
+                            fontSize: `${isSOP ? 12 : previewSettings.bodySize}pt`,
+                            color: isSOP ? "#000000" : previewSettings.bodyColor,
+                            marginBottom: `${previewSettings.spacingAfter}pt`,
                             textAlign: "justify",
                           }}
                         >
