@@ -232,6 +232,11 @@ async def format_ieee_paper(
         raise HTTPException(status_code=400, detail="Invalid settings JSON")
     try:
         file_bytes = await file.read() if file else None
+        
+        if file and file.filename.endswith(".ipynb"):
+            # Convert ipynb to basic docx first, then apply IEEE
+            file_bytes = convert_notebook(file_bytes, cfg)
+            
         result_bytes = format_ieee(file_bytes, cfg)
         filename = cfg.get("filename", "ieee_paper.docx")
         if not filename.endswith(".docx"):
