@@ -102,6 +102,15 @@ async def convert_nb(
             f = files[0]
             file_bytes = await f.read()
             result = convert_notebook(file_bytes, cfg)
+            
+            cover_cfg = cfg.get("coverPage")
+            if cover_cfg and cover_cfg.get("enabled"):
+                doc = Document(io.BytesIO(result))
+                add_cover_page(doc, cover_cfg)
+                buf = io.BytesIO()
+                doc.save(buf)
+                result = buf.getvalue()
+                
             stem = Path(f.filename or "notebook").stem
             filename = cfg.get("filename") or f"{stem}.docx"
             if not filename.endswith(".docx"):
@@ -118,6 +127,15 @@ async def convert_nb(
                 for f in files:
                     file_bytes = await f.read()
                     result = convert_notebook(file_bytes, cfg)
+                    
+                    cover_cfg = cfg.get("coverPage")
+                    if cover_cfg and cover_cfg.get("enabled"):
+                        doc = Document(io.BytesIO(result))
+                        add_cover_page(doc, cover_cfg)
+                        buf = io.BytesIO()
+                        doc.save(buf)
+                        result = buf.getvalue()
+
                     stem = Path(f.filename or "notebook").stem
                     zf.writestr(f"{stem}.docx", result)
             zip_buf.seek(0)

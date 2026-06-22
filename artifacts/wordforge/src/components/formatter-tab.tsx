@@ -123,14 +123,19 @@ export function FormatterTab() {
   const [coverPage, setCoverPage] = useState({
     enabled: false,
     title: "",
+    subject: "",
     studentName: "",
     rollNumber: "",
-    subject: "",
     department: "",
     universityName: "",
-    date: "",
+    date: new Date().toISOString().split("T")[0],
   });
 
+  const [batchFiles, setBatchFiles] = useState<File[]>([]);
+  const [isBatching, setIsBatching] = useState(false);
+  const batchFileInputRef = useRef<HTMLInputElement>(null);
+
+  const [activePreset, setActivePreset] = useState<string>("default");
   const [isFormatting, setIsFormatting] = useState(false);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [aiAnalysis, setAiAnalysis] = useState<any>(null);
@@ -553,6 +558,36 @@ export function FormatterTab() {
     }
   };
 
+  const handleBatchFormat = async () => {
+    if (batchFiles.length === 0) return;
+    setIsBatching(true);
+    try {
+      const payload = { ...settings, filename, coverPage };
+      const formData = new FormData();
+      batchFiles.forEach(f => formData.append("files", f));
+      formData.append("settings", JSON.stringify(payload));
+
+      const response = await fetch("/api/convert-notebook", { method: "POST", body: formData });
+      if (!response.ok) throw new Error("Batch processing failed");
+
+      const blob = await response.blob();
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = batchFiles.length > 1 ? "notebooks.zip" : (batchFiles[0].name.replace('.ipynb', '.docx'));
+      document.body.appendChild(a);
+      a.click();
+      URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+
+      toast.success("Batch processed and downloaded!");
+    } catch {
+      toast.error("Failed to batch process files");
+    } finally {
+      setIsBatching(false);
+    }
+  };
+
   const applyPreset = (name: string) => {
     const p = PRESETS[name as keyof typeof PRESETS] || customPresets[name];
     if (p) {
@@ -693,12 +728,12 @@ export function FormatterTab() {
               <div className="space-y-3">
                 <Label className="text-sm font-semibold">Source Document (Optional)</Label>
                 <div className="flex gap-2">
-                  <input type="file" accept=".docx" className="hidden" ref={fileInputRef}
+                  <input type="file" accept=".docx,.ipynb" className="hidden" ref={fileInputRef}
                     onChange={handleMainFileChange} />
                   <Button variant="outline" className="w-full justify-start text-muted-foreground font-normal"
                     onClick={() => fileInputRef.current?.click()}>
                     <Upload className="w-4 h-4 mr-2" />
-                    {file ? file.name : "Select .docx file..."}
+                    {file ? file.name : "Select .docx or .ipynb file..."}
                   </Button>
                   {file && (
                     <Button variant="ghost" size="icon" onClick={() => {
@@ -706,6 +741,34 @@ export function FormatterTab() {
                       setParsedDocContent(null);
                       if (fileInputRef.current) fileInputRef.current.value = "";
                     }}>&times;</Button>
+                  )}
+                </div>
+              </div>
+            </AccordionItem>
+
+            {/* Batch Processing */}
+            <AccordionItem value="batch" className="border-b-0 mb-4 bg-muted/20 p-4 rounded-lg border border-border">
+              <div className="space-y-3">
+                <Label className="text-sm font-semibold">Batch Processing (Notebooks)</Label>
+                <div className="flex flex-col gap-2">
+                  <input type="file" accept=".ipynb" multiple className="hidden" ref={batchFileInputRef}
+                    onChange={(e) => {
+                      const files = Array.from(e.target.files || []);
+                      setBatchFiles(files);
+                    }} />
+                  <Button variant="outline" className="w-full justify-start text-muted-foreground font-normal"
+                    onClick={() => batchFileInputRef.current?.click()}>
+                    <Upload className="w-4 h-4 mr-2" />
+                    {batchFiles.length > 0 ? `${batchFiles.length} files selected` : "Select multiple .ipynb files..."}
+                  </Button>
+                  {batchFiles.length > 0 && (
+                    <Button 
+                      onClick={handleBatchFormat} 
+                      disabled={isBatching}
+                      className="w-full bg-blue-600 hover:bg-blue-700 text-white"
+                    >
+                      {isBatching ? "Processing..." : "Batch Format & Download ZIP"}
+                    </Button>
                   )}
                 </div>
               </div>
