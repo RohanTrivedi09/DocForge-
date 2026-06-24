@@ -10,7 +10,7 @@ from typing import Optional, List, Tuple, Dict
 
 from docx import Document
 from docx.shared import Inches, Pt, RGBColor, Cm
-from docx.enum.text import WD_ALIGN_PARAGRAPH
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_BREAK
 from docx.oxml.ns import qn
 from docx.oxml import OxmlElement
 
@@ -247,35 +247,44 @@ def _add_sop_table(doc: Document, headers: List[str], rows: List[List[str]]):
 # ── Cover page ────────────────────────────────────────────────────────────────
 
 def _generate_sop_cover(doc: Document, chapter_number: str, chapter_title: str):
+    if len(doc.paragraphs) > 0:
+        first_para = doc.paragraphs[0]
+        def _add_p():
+            return first_para.insert_paragraph_before()
+    else:
+        def _add_p():
+            return doc.add_paragraph()
+
     # Blank space (~40% down the page)
     for _ in range(8):
-        doc.add_paragraph()
+        _add_p()
 
-    p1 = doc.add_paragraph()
+    p1 = _add_p()
     p1.alignment = WD_ALIGN_PARAGRAPH.CENTER
     r1 = p1.add_run(f"Chapter {chapter_number}")
     r1.font.name = _BODY_FONT; r1.font.size = Pt(24); r1.font.bold = True
     _force_color(r1, "1A365D")
 
-    p2 = doc.add_paragraph()
+    p2 = _add_p()
     p2.alignment = WD_ALIGN_PARAGRAPH.CENTER
     r2 = p2.add_run(chapter_title)
     r2.font.name = _BODY_FONT; r2.font.size = Pt(18); r2.font.bold = True
     _force_color(r2, "002060")
 
-    p3 = doc.add_paragraph()
+    p3 = _add_p()
     p3.alignment = WD_ALIGN_PARAGRAPH.CENTER
     r3 = p3.add_run("Standard Operating Procedure")
     r3.font.name = _BODY_FONT; r3.font.size = Pt(14); r3.font.italic = True
     _force_color(r3, "002060")
 
-    p4 = doc.add_paragraph()
+    p4 = _add_p()
     p4.alignment = WD_ALIGN_PARAGRAPH.CENTER
     r4 = p4.add_run("Gujarat State Police Wireless Grid")
     r4.font.name = _BODY_FONT; r4.font.size = Pt(12)
     _force_color(r4, "1A365D")
 
-    doc.add_page_break()
+    pb_para = _add_p()
+    pb_para.add_run().add_break(WD_BREAK.PAGE)
 
     # First page has no header
     section = doc.sections[0]
@@ -512,7 +521,66 @@ def generate_sop_document(
     Generate a Gujarat Govt. SOP .docx from pasted chapter content or uploaded document.
     Returns (docx_bytes, validation_report).
     """
-    doc = Document()
+    # If content is empty but reference docx is uploaded, format it in-place
+    if not content.strip() and reference_docx_bytes:
+        doc = Document(io.BytesIO(reference_docx_bytes))
+        
+        # Resize images to fit page width (max ~6.27 inches with 1-inch margins)
+        max_w = Inches(6.27)
+        for shape in doc.inline_shapes:
+            if shape.width > max_w:
+                ratio = max_w / shape.width
+                shape.width = int(max_w)
+                shape.height = int(shape.height * ratio)
+                
+        # Format existing paragraphs
+        for para in doc.paragraphs:
+            style_name = para.style.name if para.style else ""
+            if style_name.startswith("Heading"):
+                try:
+                    level = int(style_name.split()[-1])
+                    _apply_heading_sop(para, level)
+                except:
+                    _apply_body_fmt(para)
+            else:
+                _apply_body_fmt(para)
+                
+        # Format existing tables
+        for table in doc.tables:
+            table.style = "Table Grid"
+            tbl = table._tbl
+            tblPr = tbl.find(qn("w:tblPr"))
+            if tblPr is None:
+                tblPr = OxmlElement("w:tblPr")
+                tbl.insert(0, tblPr)
+            tblW = OxmlElement("w:tblW")
+            tblW.set(qn("w:w"), "9026")
+            tblW.set(qn("w:type"), "dxa")
+            tblPr.append(tblW)
+            
+            for r_idx, row in enumerate(table.rows):
+                for cell in row.cells:
+                    if r_idx == 0:
+                        _set_cell_shading(cell, "2C5282")
+                        _set_cell_padding(cell)
+                        for p in cell.paragraphs:
+                            for run in p.runs:
+                                run.font.name = _BODY_FONT
+                                run.font.size = Pt(10)
+                                run.font.bold = True
+                                _force_color(run, "FFFFFF")
+                    else:
+                        _set_cell_shading(cell, "F7FAFC")
+                        _set_cell_padding(cell)
+                        for p in cell.paragraphs:
+                            for run in p.runs:
+                                run.font.name = _BODY_FONT
+                                run.font.size = Pt(10)
+                                _force_color(run, "000000")
+    else:
+        doc = Document()
+        if content.strip():
+            _parse_content(doc, content)
 
     # Page setup — A4 with 1-inch margins
     for section in doc.sections:
@@ -523,10 +591,6 @@ def generate_sop_document(
         section.top_margin    = Inches(1)
         section.bottom_margin = Inches(1)
 
-    # If content is empty but reference docx is uploaded, extract content from docx
-    if not content.strip() and reference_docx_bytes:
-        content = extract_content_from_docx(reference_docx_bytes)
-
     # Reference docx color verification (informational — logged in report)
     ref_colors: Dict[str, int] = {}
     if reference_docx_bytes:
@@ -535,10 +599,6 @@ def generate_sop_document(
     # Cover page + running header
     _generate_sop_cover(doc, chapter_number, chapter_title)
     _set_sop_running_header(doc.sections[0], chapter_title)
-
-    # Parse and render content
-    if content.strip():
-        _parse_content(doc, content)
 
     # Validate output
     report = validate_sop_output(doc)
