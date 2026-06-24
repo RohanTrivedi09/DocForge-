@@ -141,7 +141,6 @@ export function FormatterTab() {
   const [aiAnalysis, setAiAnalysis] = useState<any>(null);
 
   // Gujarat Govt. SOP specific state
-  const [activePreset, setActivePreset] = useState<string | null>(null);
   const [sopChapterNumber, setSopChapterNumber] = useState("1");
   const [sopChapterTitle, setSopChapterTitle] = useState("");
   const [sopContent, setSopContent] = useState("");
