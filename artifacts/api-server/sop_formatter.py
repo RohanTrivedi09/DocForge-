@@ -511,6 +511,62 @@ def extract_content_from_docx(docx_bytes: bytes) -> str:
 
 # ── Main entry point ───────────────────────────────────────────────────────────
 
+def _format_doc_inplace(doc: Document):
+    """Apply SOP formatting to an existing document in-place, preserving images."""
+    # Resize images to fit page width (max ~6.27 inches with 1-inch margins)
+    max_w = Inches(6.27)
+    for shape in doc.inline_shapes:
+        if shape.width and shape.width > max_w:
+            ratio = max_w / shape.width
+            shape.width = int(max_w)
+            shape.height = int(shape.height * ratio)
+
+    # Format existing paragraphs (skip image-only paragraphs)
+    for para in doc.paragraphs:
+        style_name = para.style.name if para.style else ""
+        if style_name.startswith("Heading"):
+            try:
+                level = int(style_name.split()[-1])
+                _apply_heading_sop(para, level)
+            except Exception:
+                _apply_body_fmt(para)
+        else:
+            _apply_body_fmt(para)
+
+    # Format existing tables
+    for table in doc.tables:
+        table.style = "Table Grid"
+        tbl = table._tbl
+        tblPr = tbl.find(qn("w:tblPr"))
+        if tblPr is None:
+            tblPr = OxmlElement("w:tblPr")
+            tbl.insert(0, tblPr)
+        tblW = OxmlElement("w:tblW")
+        tblW.set(qn("w:w"), "9026")
+        tblW.set(qn("w:type"), "dxa")
+        tblPr.append(tblW)
+
+        for r_idx, row in enumerate(table.rows):
+            for cell in row.cells:
+                if r_idx == 0:
+                    _set_cell_shading(cell, "2C5282")
+                    _set_cell_padding(cell)
+                    for p in cell.paragraphs:
+                        for run in p.runs:
+                            run.font.name = _BODY_FONT
+                            run.font.size = Pt(10)
+                            run.font.bold = True
+                            _force_color(run, "FFFFFF")
+                else:
+                    _set_cell_shading(cell, "F7FAFC")
+                    _set_cell_padding(cell)
+                    for p in cell.paragraphs:
+                        for run in p.runs:
+                            run.font.name = _BODY_FONT
+                            run.font.size = Pt(10)
+                            _force_color(run, "000000")
+
+
 def generate_sop_document(
     content: str,
     chapter_number: str,
@@ -519,65 +575,23 @@ def generate_sop_document(
 ) -> Tuple[bytes, dict]:
     """
     Generate a Gujarat Govt. SOP .docx from pasted chapter content or uploaded document.
+    
+    Priority: If a reference .docx is uploaded, it is formatted IN-PLACE so that all
+    images, charts, drawings, and other embedded content are preserved. If pasted
+    content is also provided, it is appended after the existing document content.
+    
     Returns (docx_bytes, validation_report).
     """
-    # If content is empty but reference docx is uploaded, format it in-place
-    if not content.strip() and reference_docx_bytes:
+    if reference_docx_bytes:
+        # ── In-place path: preserves images, charts, drawings ──────────────
         doc = Document(io.BytesIO(reference_docx_bytes))
-        
-        # Resize images to fit page width (max ~6.27 inches with 1-inch margins)
-        max_w = Inches(6.27)
-        for shape in doc.inline_shapes:
-            if shape.width > max_w:
-                ratio = max_w / shape.width
-                shape.width = int(max_w)
-                shape.height = int(shape.height * ratio)
-                
-        # Format existing paragraphs
-        for para in doc.paragraphs:
-            style_name = para.style.name if para.style else ""
-            if style_name.startswith("Heading"):
-                try:
-                    level = int(style_name.split()[-1])
-                    _apply_heading_sop(para, level)
-                except:
-                    _apply_body_fmt(para)
-            else:
-                _apply_body_fmt(para)
-                
-        # Format existing tables
-        for table in doc.tables:
-            table.style = "Table Grid"
-            tbl = table._tbl
-            tblPr = tbl.find(qn("w:tblPr"))
-            if tblPr is None:
-                tblPr = OxmlElement("w:tblPr")
-                tbl.insert(0, tblPr)
-            tblW = OxmlElement("w:tblW")
-            tblW.set(qn("w:w"), "9026")
-            tblW.set(qn("w:type"), "dxa")
-            tblPr.append(tblW)
-            
-            for r_idx, row in enumerate(table.rows):
-                for cell in row.cells:
-                    if r_idx == 0:
-                        _set_cell_shading(cell, "2C5282")
-                        _set_cell_padding(cell)
-                        for p in cell.paragraphs:
-                            for run in p.runs:
-                                run.font.name = _BODY_FONT
-                                run.font.size = Pt(10)
-                                run.font.bold = True
-                                _force_color(run, "FFFFFF")
-                    else:
-                        _set_cell_shading(cell, "F7FAFC")
-                        _set_cell_padding(cell)
-                        for p in cell.paragraphs:
-                            for run in p.runs:
-                                run.font.name = _BODY_FONT
-                                run.font.size = Pt(10)
-                                _force_color(run, "000000")
+        _format_doc_inplace(doc)
+
+        # If user also pasted extra content, append it after existing content
+        if content.strip():
+            _parse_content(doc, content)
     else:
+        # ── Text-only path: create fresh document from pasted content ──────
         doc = Document()
         if content.strip():
             _parse_content(doc, content)

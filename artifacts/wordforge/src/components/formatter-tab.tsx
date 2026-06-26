@@ -850,14 +850,14 @@ export function FormatterTab() {
                       </p>
                     </div>
                     <div className="space-y-1">
-                      <Label className="text-xs">Reference .docx (optional)</Label>
+                      <Label className="text-xs">Source .docx (images preserved)</Label>
                       <input type="file" accept=".docx" className="hidden" ref={sopRefInputRef}
                         onChange={handleSopFileChange} />
                       <div className="flex gap-2">
                         <Button variant="outline" size="sm" className="flex-1 h-8 text-xs justify-start gap-2"
                           onClick={() => sopRefInputRef.current?.click()}>
                           <Upload className="w-3.5 h-3.5" />
-                          {sopRefFile ? sopRefFile.name : "Upload to verify colors..."}
+                          {sopRefFile ? sopRefFile.name : "Upload .docx to format..."}
                         </Button>
                         {sopRefFile && (
                           <Button variant="ghost" size="icon" className="h-8 w-8 shrink-0" onClick={() => {
@@ -868,7 +868,7 @@ export function FormatterTab() {
                         )}
                       </div>
                       {sopRefFile && (
-                        <p className="text-xs text-green-700">✓ Colors will be verified from reference</p>
+                        <p className="text-xs text-green-700">✓ Document will be formatted in-place — images &amp; charts preserved</p>
                       )}
                     </div>
                   </div>
